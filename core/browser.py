@@ -20,31 +20,39 @@ class BrowserManager:
     def start(self):
         if not self._playwright:
             self._playwright = sync_playwright().start()
+            launch_args = ["--start-maximized"] if not self.headless else []
             try:
                 # Try system Chrome first on Windows
                 self._browser = self._playwright.chromium.launch(
                     channel="chrome",
                     headless=self.headless,
-                    slow_mo=self.slow_mo_ms
+                    slow_mo=self.slow_mo_ms,
+                    args=launch_args
                 )
-                logger.info(f"Launched Chromium (Channel: Chrome, Headless: {self.headless})")
+                logger.info(f"Launched Chromium (Channel: Chrome, Headless: {self.headless}, Maximized: {not self.headless})")
             except Exception as e:
                 logger.warning(f"System Chrome launch failed ({e}); falling back to default Chromium executable")
                 self._browser = self._playwright.chromium.launch(
                     headless=self.headless,
-                    slow_mo=self.slow_mo_ms
+                    slow_mo=self.slow_mo_ms,
+                    args=launch_args
                 )
 
     def new_context(self, trace_name: Optional[str] = None) -> BrowserContext:
         if not self._browser:
             self.start()
 
-        context = self._browser.new_context(
-            viewport={"width": 1920, "height": 1080},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            locale="en-GB",
-            timezone_id="Europe/London"
-        )
+        context_kwargs = {
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "locale": "en-GB",
+            "timezone_id": "Europe/London"
+        }
+        if not self.headless:
+            context_kwargs["no_viewport"] = True
+        else:
+            context_kwargs["viewport"] = {"width": 1920, "height": 1080}
+
+        context = self._browser.new_context(**context_kwargs)
         context.set_default_timeout(BROWSER_TIMEOUT_MS)
 
         if self.enable_trace:
