@@ -48,8 +48,14 @@ class DataEntryBotGUI(ctk.CTk):
         super().__init__()
 
         self.title("Data Entry Bot — Automated Client Registration")
-        self.geometry("1180x780")
+        self.geometry("1280x800")
         self.minsize(980, 680)
+
+        # Maximize to full screen on startup
+        try:
+            self.state("zoomed")
+        except Exception:
+            self.after(50, lambda: self.state("zoomed"))
 
         # State & Threading
         self.log_queue = queue.Queue()
