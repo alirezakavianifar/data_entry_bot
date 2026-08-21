@@ -469,10 +469,11 @@ class DataEntryBotGUI(ctk.CTk):
     def _populate_registered_accounts(self):
         for widget in self.acc_scroll_frame.winfo_children():
             widget.destroy()
-
         try:
             state_mgr = StateManager()
-            records = state_mgr.get_all_records(RegistrationStatus.SUCCESS)
+
+            all_recs = state_mgr.get_all_records()
+            records = [r for r in all_recs if r.get("status") in ("SUCCESS", "ALREADY_REGISTERED")]
             search_query = self.acc_search_var.get().strip().lower()
 
             if search_query:
@@ -489,7 +490,7 @@ class DataEntryBotGUI(ctk.CTk):
             if not records:
                 empty_lbl = ctk.CTkLabel(
                     self.acc_scroll_frame,
-                    text="No successful registrations found matching search query.",
+                    text="No registered accounts found matching search query.",
                     font=ctk.CTkFont(size=13),
                     text_color="gray"
                 )
@@ -497,6 +498,10 @@ class DataEntryBotGUI(ctk.CTk):
                 return
 
             for idx, r in enumerate(records):
+                status_val = r.get("status")
+                is_already = (status_val == "ALREADY_REGISTERED")
+                is_verified = bool(r.get("login_verified"))
+
                 row_frame = ctk.CTkFrame(self.acc_scroll_frame, fg_color="#262626" if idx % 2 == 0 else "#2d2d2d", corner_radius=6)
                 row_frame.pack(fill="x", padx=5, pady=3)
 
@@ -504,8 +509,8 @@ class DataEntryBotGUI(ctk.CTk):
                 site_id = r.get("site_id", "")
                 email = r.get("email", "")
                 password = r.get("password") or ""
+                display_pwd = password if password else ("[Existing Account]" if is_already else "")
                 shot_path = r.get("login_screenshot_path") or r.get("screenshot_path")
-                is_verified = bool(r.get("login_verified"))
 
                 # 1. Pack Action Buttons on the RIGHT FIRST (Guarantees they never get pushed off screen)
                 def make_copy_cmd(pwd):
@@ -528,7 +533,7 @@ class DataEntryBotGUI(ctk.CTk):
                     height=26,
                     fg_color="#37474f",
                     hover_color="#455a64",
-                    command=make_copy_cmd(password)
+                    command=make_copy_cmd(display_pwd)
                 )
                 copy_btn.pack(side="right", padx=(4, 8), pady=6)
 
@@ -537,7 +542,7 @@ class DataEntryBotGUI(ctk.CTk):
                     text="🖼️ Proof",
                     width=65,
                     height=26,
-                    fg_color="#2e7d32" if is_verified else "#388e3c",
+                    fg_color="#2e7d32" if is_verified else ("#e65100" if is_already else "#388e3c"),
                     hover_color="#1b5e20",
                     command=make_view_shot_cmd(shot_path)
                 )
@@ -551,18 +556,30 @@ class DataEntryBotGUI(ctk.CTk):
                     fg_color="#0277bd",
                     hover_color="#01579b"
                 )
+                c_name = r.get('client_name', '')
+                s_name = r.get('site_name', '')
                 verify_btn.configure(
-                    command=lambda cid=client_id, sid=site_id, em=email, pw=password, btn=verify_btn: self._verify_single_account_action(cid, sid, em, pw, btn)
+                    command=lambda cid=client_id, sid=site_id, em=email, pw=password, cn=c_name, sn=s_name, btn=verify_btn: self._verify_single_account_action(cid, sid, em, pw, cn, sn, btn)
                 )
                 verify_btn.pack(side="right", padx=(4, 4), pady=6)
 
                 # 2. Pack Status Badge and Info Labels on the LEFT
+                if is_already:
+                    badge_text = "ℹ️ Existing"
+                    badge_color = "#ffb74d"
+                elif is_verified:
+                    badge_text = "🔐 Verified"
+                    badge_color = "#81c784"
+                else:
+                    badge_text = "⏳ Unverified"
+                    badge_color = "#ffa726"
+
                 status_lbl = ctk.CTkLabel(
                     row_frame,
-                    text="🔐 Verified" if is_verified else "⏳ Unverified",
+                    text=badge_text,
                     font=ctk.CTkFont(size=11, weight="bold"),
-                    text_color="#81c784" if is_verified else "#ffa726",
-                    width=80
+                    text_color=badge_color,
+                    width=85
                 )
                 status_lbl.pack(side="right", padx=(4, 8), pady=6)
 
@@ -597,9 +614,9 @@ class DataEntryBotGUI(ctk.CTk):
 
                 pwd_lbl = ctk.CTkLabel(
                     row_frame,
-                    text=f"🔑 {password}",
+                    text=f"🔑 {display_pwd}",
                     font=ctk.CTkFont(family="Consolas", size=12),
-                    text_color="#aed581",
+                    text_color="#aed581" if password else "#b0bec5",
                     anchor="w",
                     width=115
                 )
@@ -638,6 +655,7 @@ class DataEntryBotGUI(ctk.CTk):
                     text_color="#ef9a9a",
                     anchor="w"
                 )
+
                 info_lbl.pack(side="left", padx=10, pady=8, fill="x", expand=True)
 
                 shot_path = r.get("screenshot_path")
@@ -648,38 +666,56 @@ class DataEntryBotGUI(ctk.CTk):
                         row_frame, text="🖼️ Screenshot", width=90, height=24, fg_color="#b71c1c", command=make_view_cmd(shot_path)
                     )
                     view_btn.pack(side="right", padx=10, pady=8)
+
+
         except Exception as e:
             logger.error(f"Failed to populate failures: {e}")
 
-    def _verify_single_account_action(self, client_id: str, site_id: str, email: str, password: str, btn: ctk.CTkButton):
-        """Launches on-demand login verification for a single registered account."""
+    def _verify_single_account_action(self, client_id: str, site_id: str, email: str, password: str, client_name: str, site_name: str, btn: ctk.CTkButton):
+        """Launches on-demand visible login verification for a single registered account."""
         btn.configure(state="disabled", text="⏳ Testing...")
-        headed = "Visible" in self.browser_mode_selector.get()
+
+        # Build a fresh provider from current GUI settings (self.provider is never stored on the instance)
+        source = "excel" if self.src_selector.get() == "Excel (.xlsx)" else "sheets"
+        excel_path = Path(self.excel_path_var.get())
+        sheet_url = self.sheets_url_var.get()
+        provider = get_data_provider(source=source, excel_path=excel_path, sheet_url=sheet_url)
 
         def worker():
             try:
-                logger.info(f"Starting manual login verification for {client_id} ({email}) on {site_id}")
+                logger.info(f"Starting visible login verification for {client_id} ({email}) on {site_id}")
                 success, proof_path, err = verify_single_account(
                     client_id=client_id,
                     site_id=site_id,
                     email=email,
                     password=password,
-                    headed=headed
+                    client_name=client_name,
+                    site_name=site_name,
+                    headed=True,
+                    provider=provider
                 )
                 if success:
                     logger.info(f"🎉 Login verified successfully for {email}! Proof: {proof_path}")
-                    self.after(0, lambda: messagebox.showinfo("Login Verified", f"Account successfully logged in!\nProof saved: {proof_path}"))
+                    self.after(0, lambda: messagebox.showinfo("Login Verified", f"Account successfully logged in!\nProof saved:\n{proof_path}"))
                 else:
-                    logger.warning(f"❌ Login verification failed for {email}: {err}")
-                    self.after(0, lambda: messagebox.showwarning("Login Verification Failed", f"Login test failed:\n{err}"))
+                    logger.warning(f"❌ Login verification unconfirmed for {email}: {err}")
+                    self.after(0, lambda: messagebox.showwarning(
+                        "Login Verification Result",
+                        f"Login verification result for {client_name or email} on {site_name or site_id}:\n\n{err}"
+                    ))
             except Exception as e:
                 logger.error(f"Exception during manual verification: {e}")
+                self.after(0, lambda err_s=str(e): messagebox.showerror("Verification Error", f"Error during verification: {err_s}"))
             finally:
                 self.after(0, lambda: self._populate_registered_accounts())
+                self.after(0, lambda: self._populate_failures())
 
         threading.Thread(target=worker, daemon=True).start()
 
+
+
     def _copy_to_clipboard(self, text: str):
+
         self.clipboard_clear()
         self.clipboard_append(text)
         messagebox.showinfo("Copied", "Password copied to clipboard!")

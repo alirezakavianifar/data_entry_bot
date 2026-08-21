@@ -1,8 +1,8 @@
-import time
 from playwright.sync_api import Page
-from sites.base import BaseSiteAdapter
+from sites.base import BaseSiteAdapter, extract_clean_error_message, is_already_registered_error
 from data.models import Client, RegistrationResult, RegistrationStatus
 from core.logger import get_logger, capture_failure_bundle, capture_success_screenshot
+
 
 
 class AffiliateRedirectAdapter(BaseSiteAdapter):
@@ -69,14 +69,49 @@ class AffiliateRedirectAdapter(BaseSiteAdapter):
             page.wait_for_timeout(4000)
 
         # 5. Success Confirmation & Proof
+        error_modal = page.locator('div[class*="error"]:visible, div[role="alert"]:visible, .error-message:visible').first
+        if error_modal.is_visible(timeout=1500):
+            raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
+            clean_err = extract_clean_error_message(raw_err_text)
+            is_duplicate = is_already_registered_error(raw_err_text)
+
+            if is_duplicate:
+                log.warning(f"⚠️ {self.site_name}: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
+                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                return RegistrationResult(
+                    client_id=client.client_id,
+                    client_name=client.full_name,
+                    site_id=self.site_id,
+                    site_name=self.site_name,
+                    status=RegistrationStatus.ALREADY_REGISTERED,
+                    email=client.email,
+                    password=password,
+                    error_summary=f"Already registered: {clean_err}",
+                    screenshot_path=bundle.screenshot_path,
+                    dom_snapshot_path=bundle.dom_snapshot_path
+                )
+            else:
+                log.warning(f"{self.site_name} registration rejected: {clean_err}")
+                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(clean_err))
+                return RegistrationResult(
+                    client_id=client.client_id,
+                    client_name=client.full_name,
+                    site_id=self.site_id,
+                    site_name=self.site_name,
+                    status=RegistrationStatus.FAILED,
+                    email=client.email,
+                    password=password,
+                    error_summary=clean_err,
+                    screenshot_path=bundle.screenshot_path,
+                    dom_snapshot_path=bundle.dom_snapshot_path
+                )
+
+
         auth_indicators = [
             'a:has-text("Deposit")', 'button:has-text("Deposit")',
             'a:has-text("My Account")', 'button:has-text("My Account")',
             '.user-balance', '.account-balance', '[class*="deposit-modal"]'
         ]
-        join_btn = page.locator('a:has-text("Sign Up"), button:has-text("Sign Up"), a:has-text("Register"), button:has-text("Register"), a:has-text("Join")').first
-        is_join_visible = join_btn.is_visible(timeout=1500)
-
         has_auth = False
         for selector in auth_indicators:
             try:
@@ -86,7 +121,9 @@ class AffiliateRedirectAdapter(BaseSiteAdapter):
             except Exception:
                 continue
 
-        if has_auth or not is_join_visible:
+        is_reg_open = page.locator('input[type="password"]:visible, input[name*="password"]:visible').first.is_visible(timeout=1000)
+
+        if has_auth and not is_reg_open:
             log.info(f"{self.site_name} registration confirmed successfully!")
             success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
             return RegistrationResult(
@@ -115,4 +152,5 @@ class AffiliateRedirectAdapter(BaseSiteAdapter):
             error_summary=f"Registration was not confirmed by {self.site_name}",
             screenshot_path=bundle.screenshot_path
         )
+
 

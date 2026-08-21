@@ -11,7 +11,9 @@ class RegistrationStatus(str, Enum):
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
     MANUAL_REVIEW = "MANUAL_REVIEW"
+    ALREADY_REGISTERED = "ALREADY_REGISTERED"
     SKIPPED = "SKIPPED"
+
 
 
 class Client(BaseModel):

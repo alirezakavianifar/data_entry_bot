@@ -1,7 +1,5 @@
-import time
-from typing import Optional
 from playwright.sync_api import Page
-from sites.base import BaseSiteAdapter
+from sites.base import BaseSiteAdapter, extract_clean_error_message, is_already_registered_error
 from data.models import Client, RegistrationResult, RegistrationStatus
 from core.logger import get_logger, capture_failure_bundle, capture_success_screenshot, capture_login_proof_screenshot
 
@@ -14,8 +12,9 @@ class QuinnbetAdapter(BaseSiteAdapter):
             site_id="quinnbet",
             site_name="QuinnBet",
             default_promo_url=promo_url,
-            requires_uk_ip=True
+            requires_uk_ip=False
         )
+
 
     def fill_registration(self, page: Page, client: Client, password: str) -> RegistrationResult:
         log = get_logger(client_id=client.client_id, site_id=self.site_id, step="fill_registration")
@@ -152,16 +151,51 @@ class QuinnbetAdapter(BaseSiteAdapter):
                 final_btn.click(force=True)
                 page.wait_for_timeout(5000)
 
-            # 5. Confirm Registration Success
+            # Check for error message in registration
+            error_modal = page.locator('app-register .alert:visible, app-register .error:visible, mat-error:visible, div[role="alert"]:visible').first
+            if error_modal.is_visible(timeout=1500):
+                raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
+                clean_err = extract_clean_error_message(raw_err_text)
+                is_duplicate = is_already_registered_error(raw_err_text)
+
+                if is_duplicate:
+                    log.warning(f"⚠️ QuinnBet: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.ALREADY_REGISTERED,
+                        email=client.email,
+                        password=password,
+                        error_summary=f"Already registered: {clean_err}",
+                        screenshot_path=bundle.screenshot_path,
+                        dom_snapshot_path=bundle.dom_snapshot_path
+                    )
+                else:
+                    log.warning(f"QuinnBet registration rejected: {clean_err}")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(clean_err))
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.FAILED,
+                        email=client.email,
+                        password=password,
+                        error_summary=clean_err,
+                        screenshot_path=bundle.screenshot_path,
+                        dom_snapshot_path=bundle.dom_snapshot_path
+                    )
+
+
             auth_indicators = [
                 'a:has-text("Deposit")', 'button:has-text("Deposit")',
                 'a:has-text("My Account")', 'button:has-text("My Account")',
                 '[data-testid*="user-menu"]', '[data-testid*="balance"]',
                 '.user-balance', '.account-balance', '[class*="deposit-modal"]'
             ]
-            join_btn = page.locator('button[data-testid="register-button"], a[data-testid="register-button"], button:has-text("JOIN")').first
-            is_join_visible = join_btn.is_visible(timeout=1500)
-
             has_auth = False
             for selector in auth_indicators:
                 try:
@@ -171,7 +205,11 @@ class QuinnbetAdapter(BaseSiteAdapter):
                 except Exception:
                     continue
 
-            if has_auth or not is_join_visible:
+            is_reg_open = page.locator('app-register:visible, input[name="email"]:visible').first.is_visible(timeout=1000)
+
+
+
+            if has_auth and not is_reg_open:
                 log.info("QuinnBet registration confirmed successfully!")
                 success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
                 return RegistrationResult(
@@ -294,18 +332,19 @@ class QuinnbetAdapter(BaseSiteAdapter):
                     continue
 
             # Check for error message
-            err_el = page.locator('app-login .alert, app-login .error, app-login mat-error, div.alert-danger').first
+            err_el = page.locator('app-login .alert:visible, app-login .error:visible, app-login mat-error:visible, div.alert-danger:visible').first
             err_msg = None
             if err_el.is_visible(timeout=1000):
-                err_msg = err_el.inner_text().strip()
+                err_msg = err_el.inner_text().strip().replace("\n", " - ")
 
-            if is_authenticated or (not is_modal_open and not err_msg):
+            if is_authenticated and not is_modal_open and not err_msg:
                 log.info(f"QuinnBet login successfully verified! Proof: {proof_path}")
                 return True, proof_path, None
             else:
-                summary = err_msg or "Login failed: Credentials rejected (login modal remained open)"
+                summary = err_msg or "Login failed: Credentials rejected (login modal remained open or session not active)"
                 log.warning(f"QuinnBet login failed: {summary}")
                 return False, proof_path, summary
+
 
         except Exception as e:
             log.error(f"QuinnBet login error: {e}")

@@ -30,3 +30,9 @@ class BaseDataProvider(ABC):
     def record_failure(self, result: RegistrationResult) -> bool:
         """Optionally logs failure notes or status in the results destination."""
         pass
+
+    @abstractmethod
+    def remove_success(self, client_name: str, site_name: str, email: str = "") -> int:
+        """Removes a previously recorded successful registration row if invalid."""
+        pass
+

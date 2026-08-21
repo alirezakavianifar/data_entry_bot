@@ -1,12 +1,69 @@
+import re
 import time
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, Tuple
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 
 from data.models import Client, RegistrationResult, RegistrationStatus
 from core.logger import get_logger, capture_failure_bundle, capture_login_proof_screenshot
 
+ALREADY_REGISTERED_PATTERNS = [
+    r"looks like you['’]re already registered",
+    r"already registered",
+    r"account with this email (?:already )?exists",
+    r"account (?:already )?exists",
+    r"email (?:address )?is already (?:registered|in use)",
+    r"user(?:name)? already exists",
+    r"duplicate account",
+    r"already have an account"
+]
+
+def extract_clean_error_message(text: str) -> str:
+    """Extracts a succinct, human-readable error message from raw modal/page text."""
+    if not text:
+        return ""
+    # Check for known explicit error sentences
+    for pat in [
+        r"(looks like you['’]re already registered[^\.\n]*[\.\n]?)",
+        r"(an? account with this [^\.\n]+ already exists)",
+        r"(email (?:address )?is already (?:registered|in use)[^\.\n]*)",
+        r"(user(?:name)? already exists[^\.\n]*)",
+        r"(already registered[^\.\n]*)",
+        r"(invalid credentials[^\.\n]*)",
+        r"(unable to (?:register|process)[^\.\n]*)",
+        r"(please (?:check|correct) the following errors?:?[^\.\n]*)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+
+    # Look for line after "Error" label
+    lines = [l.strip() for l in text.replace(" - ", "\n").splitlines() if l.strip()]
+    for idx, line in enumerate(lines):
+        if line.lower() in ("error", "error:", "×", "x", "alert", "warning") and idx + 1 < len(lines):
+            candidate = lines[idx + 1]
+            if len(candidate) > 5 and not any(k in candidate.lower() for k in ("contact us", "cookie policy", "terms")):
+                return f"{candidate}"
+        elif "error" in line.lower() and len(line) > 10 and not any(k in line.lower() for k in ("racing", "greyhound", "cookie")):
+            return line
+
+    for l in lines:
+        if any(k in l.lower() for k in ("already", "exists", "invalid", "failed", "error", "unable", "sorry", "cannot")):
+            return l
+
+    return text[:160].strip()
+
+def is_already_registered_error(text: str) -> bool:
+    """Returns True if the error message indicates the client account already exists."""
+    if not text:
+        return False
+    for pat in ALREADY_REGISTERED_PATTERNS:
+        if re.search(pat, text, re.IGNORECASE):
+            return True
+    return False
+
 COMMON_COOKIE_SELECTORS = [
+
     '#onetrust-accept-btn-handler',
     '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
     '#CybotCookiebotDialogBodyButtonAccept',
@@ -223,7 +280,7 @@ class BaseSiteAdapter(ABC):
                 except Exception:
                     pass
 
-            # 7. Check if Login CTA is STILL visible (indicates user is NOT logged in)
+            # 7. Check if Login CTA is STILL visible
             login_cta = page.locator('a[data-test="account-navigation-login-link"], a:has-text("Login"), button:has-text("Login"), a:has-text("Log In"), button:has-text("Log In")').first
             is_login_cta_visible = False
             try:
@@ -253,25 +310,29 @@ class BaseSiteAdapter(ABC):
                     continue
 
             # Check for invalid credentials / lock error banner
-            error_el = page.locator('div[class*="error"], span[class*="error"], p[class*="error"], div[role="alert"], [class*="alert"]').first
+            error_el = page.locator('div[class*="error"]:visible, span[class*="error"]:visible, p[class*="error"]:visible, div[role="alert"]:visible, [class*="alert"]:visible, :has-text("not verified"):visible, :has-text("Invalid"):visible, :has-text("incorrect"):visible').first
             err_msg_found = None
             if error_el.is_visible(timeout=1000):
                 err_text = error_el.inner_text().strip()
-                if any(err_kw in err_text.lower() for err_kw in ["invalid", "incorrect", "locked", "disabled", "failed", "unrecognized", "error"]):
+                if any(err_kw in err_text.lower() for err_kw in ["invalid", "incorrect", "locked", "disabled", "failed", "unrecognized", "error", "not verified"]):
                     err_msg_found = err_text
 
-            # Final Evaluation
-            is_authenticated = (has_auth_widget and not is_login_cta_visible) or (not is_login_cta_visible and not err_msg_found)
+            # Check if login modal/drawer is still open
+            is_login_form_open = page.locator('input[type="password"]:visible, form input#password:visible').first.is_visible(timeout=1000)
 
-            if is_authenticated and not err_msg_found:
-                proof_path = capture_login_proof_screenshot(page, cid, self.site_id)
+            # Strict Evaluation: Login is ONLY verified if genuine auth indicators exist, login form is closed, and no errors
+            is_authenticated = has_auth_widget and not is_login_form_open and not err_msg_found
+
+            proof_path = capture_login_proof_screenshot(page, cid, self.site_id)
+
+            if is_authenticated:
                 log.info(f"Login verified successfully for {username_or_email}! Proof saved: {proof_path}")
                 return True, proof_path, None
             else:
-                proof_path = capture_login_proof_screenshot(page, cid, self.site_id)
-                err_summary = err_msg_found or "Login could not be verified — Login button remains visible"
-                log.warning(f"Login failed/unconfirmed: {err_summary}")
+                err_summary = err_msg_found or "Login failed: account indicators not found or credentials rejected"
+                log.warning(f"Login unconfirmed: {err_summary}")
                 return False, proof_path, err_summary
+
 
         except Exception as e:
             log.error(f"Exception during login verification: {e}")

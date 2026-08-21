@@ -1,7 +1,5 @@
-import time
-from typing import Optional
 from playwright.sync_api import Page
-from sites.base import BaseSiteAdapter
+from sites.base import BaseSiteAdapter, extract_clean_error_message, is_already_registered_error
 from data.models import Client, RegistrationResult, RegistrationStatus
 from core.logger import get_logger, capture_failure_bundle, capture_success_screenshot, capture_login_proof_screenshot
 
@@ -14,8 +12,9 @@ class BetgoodwinAdapter(BaseSiteAdapter):
             site_id="betgoodwin",
             site_name="Betgoodwin",
             default_promo_url=promo_url,
-            requires_uk_ip=True
+            requires_uk_ip=False
         )
+
 
     def fill_registration(self, page: Page, client: Client, password: str) -> RegistrationResult:
         log = get_logger(client_id=client.client_id, site_id=self.site_id, step="fill_registration")
@@ -87,7 +86,48 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                 except Exception:
                     continue
 
-            if has_auth or not is_join_visible:
+            # Check for error banners first
+            error_modal = page.locator('div[class*="error"]:visible, div[role="alert"]:visible, .error-message:visible').first
+            if error_modal.is_visible(timeout=1500):
+                raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
+                clean_err = extract_clean_error_message(raw_err_text)
+                is_duplicate = is_already_registered_error(raw_err_text)
+
+                if is_duplicate:
+                    log.warning(f"⚠️ Betgoodwin: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.ALREADY_REGISTERED,
+                        email=client.email,
+                        password=password,
+                        error_summary=f"Already registered: {clean_err}",
+                        screenshot_path=bundle.screenshot_path,
+                        dom_snapshot_path=bundle.dom_snapshot_path
+                    )
+                else:
+                    log.warning(f"Betgoodwin registration rejected: {clean_err}")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(clean_err))
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.FAILED,
+                        email=client.email,
+                        password=password,
+                        error_summary=clean_err,
+                        screenshot_path=bundle.screenshot_path,
+                        dom_snapshot_path=bundle.dom_snapshot_path
+                    )
+
+
+            is_reg_open = page.locator('input[name*="user" i]:visible, input[name*="email" i]:visible, input#email:visible').first.is_visible(timeout=1000)
+
+            if has_auth and not is_reg_open:
                 log.info("Betgoodwin registration confirmed successfully!")
                 success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
                 return RegistrationResult(
@@ -168,7 +208,8 @@ class BetgoodwinAdapter(BaseSiteAdapter):
             pwd_inp.fill(password)
             page.wait_for_timeout(500)
 
-            submit_btn = page.locator('form button[type="submit"], button:has-text("Log In"), button:has-text("Login"), button[type="submit"]').first
+            modal = page.locator('div[class*="modal"], div[class*="login"], form').first
+            submit_btn = modal.locator('button[type="submit"]:has-text("Log In"), button:has-text("Log In"), button[type="submit"]').first
             if submit_btn.is_visible(timeout=2000):
                 submit_btn.click(force=True)
             else:
@@ -176,13 +217,11 @@ class BetgoodwinAdapter(BaseSiteAdapter):
 
             page.wait_for_timeout(5000)
 
-            login_btn = page.locator('button:has-text("Log In"), a:has-text("Log In"), button:has-text("Login")').first
-            is_login_visible = False
-            try:
-                if login_btn.is_visible(timeout=1500):
-                    is_login_visible = True
-            except Exception:
-                pass
+            # Check for error messages
+            err_el = page.locator('div[class*="error"]:visible, .error-message:visible, div[role="alert"]:visible, :has-text("not verified"):visible, :has-text("Invalid"):visible').first
+            err_text = None
+            if err_el.is_visible(timeout=1000):
+                err_text = err_el.inner_text().strip().replace("\n", " - ")
 
             proof_path = capture_login_proof_screenshot(page, cid, self.site_id)
 
@@ -201,15 +240,19 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                 except Exception:
                     continue
 
-            if (has_auth and not is_login_visible) or not is_login_visible:
+            is_login_open = page.locator('input[type="password"]:visible').first.is_visible(timeout=1000)
+
+            if has_auth and not is_login_open and not err_text:
                 log.info(f"Betgoodwin login successfully verified! Proof: {proof_path}")
                 return True, proof_path, None
             else:
-                log.warning("Betgoodwin login failed - Log In button still visible")
-                return False, proof_path, "Login failed: Credentials rejected or Log In CTA still visible"
+                summary = err_text or "Login failed: Credentials rejected or session indicators not found"
+                log.warning(f"Betgoodwin login failed: {summary}")
+                return False, proof_path, summary
 
         except Exception as e:
             log.error(f"Betgoodwin login error: {e}")
             bundle = capture_failure_bundle(page, cid, self.site_id, "login_exception", e)
             return False, bundle.screenshot_path, str(e)
+
 

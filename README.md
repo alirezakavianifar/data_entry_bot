@@ -135,18 +135,24 @@ data_entry_bot/
 
 ---
 
-## Login Verification Workflow
+## Login Verification & Automatic False-Positive Cleanup
 
-1. **Automatic Mode (During Registration):**
-   - When a client account registration succeeds and `AUTO_VERIFY_LOGIN=true` (or the GUI switch is active), the engine creates a clean browser context.
-   - The bot navigates to the bookmaker, clicks Log In, inputs the client's email/username and password, and submits.
-   - It checks for authenticated user indicators (account balance, wallet widget, profile avatar, logout CTA).
-   - Upon successful verification, it captures a high-resolution screenshot saved as `<timestamp>_<client_id>_<site_id>_LOGIN_PROOF.png` and updates the SQLite database with `login_verified = 1`.
+1. **Automatic Verification (Post-Registration):**
+   - When a client account registration completes and `AUTO_VERIFY_LOGIN=true` (or the GUI switch is checked), the bot immediately opens a clean browser session to log in with the new credentials.
+   - It validates active session indicators (Deposit button, account balance, user menu).
+   - If login succeeds, it captures a logged-in dashboard proof (`_LOGIN_PROOF.png`), flags the record as `🔐 Verified` in SQLite, and writes the credentials to `'Succesful Signuos'` in Excel/Google Sheets.
+   - **Automatic False-Positive Downgrade:** If login fails (e.g. `Invalid credentials` or registration was rejected by the server), the bot **downgrades** the result to `FAILED`, removes any false entry from `'Succesful Signuos'`, records the error in the database, and frees the client record so a fresh registration can be executed.
+
 2. **On-Demand Manual Verification (Desktop GUI):**
    - Open the **✅ Registered Accounts** tab in the Desktop GUI.
-   - Beside any registered account, click **`🔑 Verify`**.
-   - A background thread launches Playwright, logs into the site, captures the new proof image, and updates the status to `🔐 Verified`.
-   - Click **`🖼️ Proof`** to instantly open and view the verified screenshot.
+   - Beside any account, click **`🔑 Verify`**.
+   - A background worker launches Playwright, attempts authentication, and captures fresh proof.
+   - If the site rejects the credentials (e.g. invalid credentials):
+     - The row is **automatically removed** from the `'Succesful Signuos'` sheet in Excel / Google Sheets.
+     - The database status is reset to `FAILED` / `PENDING`.
+     - The user is notified via dialog, and the record can now be freshly re-registered.
+   - Click **`🖼️ Proof`** to instantly open the verified logged-in screenshot proof.
+
 
 ---
 

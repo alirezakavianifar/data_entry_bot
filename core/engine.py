@@ -67,7 +67,7 @@ class AutomationEngine:
             return {"status": "dry_run_complete", "clients_validated": len(selected_clients)}
 
         # 3. Main Execution Loop
-        stats = {"processed_clients": 0, "success_count": 0, "failed_count": 0, "skipped_count": 0}
+        stats = {"processed_clients": 0, "success_count": 0, "already_registered_count": 0, "failed_count": 0, "skipped_count": 0}
         
         try:
             self.browser_mgr.start()
@@ -78,9 +78,9 @@ class AutomationEngine:
                 logger.info(f"=======================================================")
 
                 for site in active_adapters:
-                    # Check if already completed
+                    # Check if already completed / already registered
                     if self.state_mgr.is_complete(client.client_id, site.site_id):
-                        logger.info(f"Skipping {site.site_name} for {client.full_name} (Already Completed/Skipped)")
+                        logger.info(f"Skipping {site.site_name} for {client.full_name} (Already Completed or Registered)")
                         stats["skipped_count"] += 1
                         continue
 
@@ -128,11 +128,19 @@ class AutomationEngine:
                                     result.screenshot_path = login_proof
                                     logger.info(f"✅ Login verified with visual proof: {login_proof}")
                                 else:
+                                    # Conclusive proof that registration was not successful / credentials rejected
+                                    result.status = RegistrationStatus.FAILED
                                     result.login_verified = False
                                     result.login_error = login_err
-                                    logger.warning(f"⚠️ Login verification unconfirmed: {login_err}")
+                                    result.error_summary = f"Login verification failed: {login_err or 'Invalid credentials'}"
+                                    logger.warning(f"❌ Login verification rejected ({login_err}). Registration marked as FAILED.")
+                                    self.provider.remove_success(client_name=client.full_name, site_name=site.site_name, email=client.email)
                             except Exception as le:
                                 logger.error(f"Error during login verification step: {le}")
+                                result.status = RegistrationStatus.FAILED
+                                result.login_verified = False
+                                result.error_summary = f"Login verification error: {le}"
+                                self.provider.remove_success(client_name=client.full_name, site_name=site.site_name, email=client.email)
                             finally:
                                 try:
                                     login_ctx.close()
@@ -146,6 +154,9 @@ class AutomationEngine:
                         if result.status == RegistrationStatus.SUCCESS:
                             self.provider.record_success(result)
                             stats["success_count"] += 1
+                        elif result.status == RegistrationStatus.ALREADY_REGISTERED:
+                            logger.info(f"ℹ️ {client.full_name} recorded as ALREADY_REGISTERED on {site.site_name}")
+                            stats["already_registered_count"] += 1
                         else:
                             self.provider.record_failure(result)
                             stats["failed_count"] += 1
@@ -155,6 +166,7 @@ class AutomationEngine:
                         stats["failed_count"] += 1
 
                 stats["processed_clients"] += 1
+
 
         finally:
             self.browser_mgr.close()
@@ -172,11 +184,16 @@ def verify_single_account(
     site_id: str,
     email: str,
     password: str,
-    headed: bool = False
+    client_name: str = "",
+    site_name: str = "",
+    headed: bool = True,
+    provider: Optional[BaseDataProvider] = None
 ) -> Tuple[bool, Optional[str], Optional[str]]:
+
     """
     On-demand single account login verification utility.
     Launches browser, attempts login, captures proof screenshot, and updates StateManager.
+    If login fails (e.g. invalid credentials), removes false positive row from provider and updates state to FAILED.
     Returns (success, proof_path, error_message).
     """
     state_mgr = StateManager()
@@ -208,6 +225,14 @@ def verify_single_account(
             error_summary=error_msg
         )
 
+        if not success:
+            # Remove false positive record from spreadsheet
+            if provider:
+                c_name = client_name
+                s_name = site_name or adapter.site_name
+                deleted = provider.remove_success(client_name=c_name, site_name=s_name, email=email)
+                logger.info(f"Removed {deleted} false positive row(s) from provider for {client_id}")
+
         try:
             context.close()
         except Exception:
@@ -220,4 +245,85 @@ def verify_single_account(
         return False, None, str(e)
     finally:
         browser_mgr.close()
+
+
+def register_single_account(
+    client: Client,
+    site_id: str,
+    provider: BaseDataProvider,
+    headed: bool = False,
+    verify_login: bool = True
+) -> RegistrationResult:
+    """
+    Executes a fresh registration for a single client on a specific site.
+    """
+    state_mgr = StateManager()
+    browser_mgr = BrowserManager(headless=not headed)
+    adapters = get_site_adapters(filter_sites=[site_id])
+    if not adapters:
+        raise ValueError(f"No adapter found for site '{site_id}'")
+
+    site = adapters[0]
+    password = generate_password()
+
+    # Reset any previous failed/false state
+    state_mgr.reset_record(client.client_id, site_id)
+    state_mgr.set_status(
+        client_id=client.client_id,
+        site_id=site.site_id,
+        status=RegistrationStatus.IN_PROGRESS,
+        client_name=client.full_name,
+        site_name=site.site_name
+    )
+
+    try:
+        browser_mgr.start()
+        context = browser_mgr.new_context(trace_name=f"{client.client_id}_{site.site_id}_fresh")
+        page = context.new_page()
+
+        result = site.execute(page=page, client=client, password=password)
+
+        try:
+            context.close()
+        except Exception:
+            pass
+
+        # Post-Registration Login Verification
+        if result.status == RegistrationStatus.SUCCESS and verify_login:
+            login_ctx = browser_mgr.new_context(trace_name=f"{client.client_id}_{site.site_id}_login")
+            login_page = login_ctx.new_page()
+            try:
+                login_ok, login_proof, login_err = site.login(
+                    page=login_page,
+                    username_or_email=client.email,
+                    password=password,
+                    client_id=client.client_id
+                )
+                if login_ok and login_proof:
+                    result.login_verified = True
+                    result.login_screenshot_path = login_proof
+                    result.screenshot_path = login_proof
+                else:
+                    result.status = RegistrationStatus.FAILED
+                    result.login_verified = False
+                    result.login_error = login_err
+                    result.error_summary = f"Login verification rejected: {login_err}"
+            finally:
+                try:
+                    login_ctx.close()
+                except Exception:
+                    pass
+
+        state_mgr.record_result(result)
+
+        if result.status == RegistrationStatus.SUCCESS:
+            provider.record_success(result)
+        else:
+            provider.record_failure(result)
+
+        return result
+
+    finally:
+        browser_mgr.close()
+
 

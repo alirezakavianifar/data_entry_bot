@@ -179,3 +179,49 @@ class GoogleSheetsProvider(BaseDataProvider):
     def record_failure(self, result: RegistrationResult) -> bool:
         logger.warning(f"Google Sheets failure log: {result.client_name} on {result.site_name}: {result.error_summary}")
         return True
+
+    def remove_success(self, client_name: str, site_name: str, email: str = "") -> int:
+        """
+        Removes matching rows from the Google Sheet successful signups tab.
+        Returns count of deleted rows.
+        """
+        try:
+            ss = self._get_spreadsheet()
+            worksheet = None
+            for ws in ss.worksheets():
+                if ws.title.strip().lower() in (self.output_sheet_name.strip().lower(), "successful signups", "succesful signuos"):
+                    worksheet = ws
+                    break
+
+            if not worksheet:
+                return 0
+
+            all_values = worksheet.get_all_values()
+            if len(all_values) <= 1:
+                return 0
+
+            deleted_count = 0
+            c_name_clean = client_name.strip().lower()
+            site_clean = site_name.strip().lower()
+            email_clean = email.strip().lower() if email else ""
+
+            # Delete in reverse order
+            for row_idx in range(len(all_values), 1, -1):
+                row = all_values[row_idx - 1]
+                row_name = (row[0] if len(row) > 0 else "").strip().lower()
+                row_site = (row[1] if len(row) > 1 else "").strip().lower()
+                row_email = (row[2] if len(row) > 2 else "").strip().lower()
+
+                name_match = (row_name == c_name_clean or c_name_clean in row_name or row_name in c_name_clean) and (row_site == site_clean or site_clean in row_site)
+                email_match = (email_clean and row_email == email_clean) and (row_site == site_clean or site_clean in row_site)
+
+                if name_match or email_match:
+                    logger.info(f"Deleting Google Sheets row {row_idx} ({row_name}, {row_site})")
+                    worksheet.delete_rows(row_idx)
+                    deleted_count += 1
+
+            return deleted_count
+        except Exception as e:
+            logger.error(f"Failed to remove record from Google Sheets: {e}")
+            return 0
+

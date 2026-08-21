@@ -87,9 +87,10 @@ class StateManager:
             conn.close()
 
     def is_complete(self, client_id: str, site_id: str) -> bool:
-        """Returns True if the site signup is already completed or skipped."""
+        """Returns True if the site signup is already completed, skipped, or already registered."""
         status = self.get_status(client_id, site_id)
-        return status in (RegistrationStatus.SUCCESS, RegistrationStatus.SKIPPED)
+        return status in (RegistrationStatus.SUCCESS, RegistrationStatus.SKIPPED, RegistrationStatus.ALREADY_REGISTERED)
+
 
     def set_status(
         self,
@@ -164,30 +165,46 @@ class StateManager:
         screenshot_path: Optional[str] = None,
         error_summary: Optional[str] = None
     ):
-        """Updates login verification state and login proof screenshot."""
+        """Updates login verification state and login proof screenshot. Downgrades status to FAILED if false."""
         now = datetime.datetime.now().isoformat()
         conn = self._get_connection()
         try:
-            conn.execute("""
-                UPDATE client_site_status
-                SET login_verified = ?,
-                    login_screenshot_path = COALESCE(?, login_screenshot_path),
-                    screenshot_path = COALESCE(?, screenshot_path),
-                    error_summary = COALESCE(?, error_summary),
-                    updated_at = ?
-                WHERE client_id = ? AND site_id = ?
-            """, (
-                1 if success else 0,
-                screenshot_path,
-                screenshot_path if success else None,
-                error_summary,
-                now,
-                client_id,
-                site_id
-            ))
+            if success:
+                conn.execute("""
+                    UPDATE client_site_status
+                    SET login_verified = 1,
+                        status = 'SUCCESS',
+                        login_screenshot_path = COALESCE(?, login_screenshot_path),
+                        screenshot_path = COALESCE(?, screenshot_path),
+                        updated_at = ?
+                    WHERE client_id = ? AND site_id = ?
+                """, (screenshot_path, screenshot_path, now, client_id, site_id))
+            else:
+                conn.execute("""
+                    UPDATE client_site_status
+                    SET login_verified = 0,
+                        status = 'FAILED',
+                        login_screenshot_path = COALESCE(?, login_screenshot_path),
+                        error_summary = COALESCE(?, error_summary),
+                        updated_at = ?
+                    WHERE client_id = ? AND site_id = ?
+                """, (screenshot_path, error_summary, now, client_id, site_id))
             conn.commit()
         finally:
             conn.close()
+
+    def reset_record(self, client_id: str, site_id: str):
+        """Resets a client-site status back to PENDING so fresh registration can be run."""
+        conn = self._get_connection()
+        try:
+            conn.execute(
+                "DELETE FROM client_site_status WHERE client_id = ? AND site_id = ?",
+                (client_id, site_id)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
 
 
     def get_all_records(self, status: Optional[RegistrationStatus] = None) -> List[Dict]:

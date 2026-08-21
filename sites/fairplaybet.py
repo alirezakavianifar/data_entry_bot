@@ -1,7 +1,7 @@
-import time
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
-from sites.base import BaseSiteAdapter
+from sites.base import BaseSiteAdapter, extract_clean_error_message, is_already_registered_error
 from data.models import Client, RegistrationResult, RegistrationStatus
+
 from core.logger import get_logger, capture_failure_bundle, capture_success_screenshot
 
 
@@ -19,8 +19,11 @@ class FairplayBetAdapter(BaseSiteAdapter):
     def fill_registration(self, page: Page, client: Client, password: str) -> RegistrationResult:
         log = get_logger(client_id=client.client_id, site_id=self.site_id, step="fill_registration")
 
-        # 1. Click Register button to open the modal
-        log.info("Locating and clicking Register button")
+        # 1. Dismiss cookies
+        self.accept_cookies(page)
+
+        # 2. Click Register button to open drawer
+        log.info("Locating and opening Fairplay Bet registration drawer")
         register_btn = page.locator('button:has-text("Register"), a:has-text("Register")').first
         if not register_btn.is_visible(timeout=5000):
             bundle = capture_failure_bundle(page, client.client_id, self.site_id, "click_register")
@@ -31,7 +34,7 @@ class FairplayBetAdapter(BaseSiteAdapter):
                 site_name=self.site_name,
                 status=RegistrationStatus.FAILED,
                 email=client.email,
-                error_summary="Register button not found on page",
+                error_summary="Register button not found on Fairplay Bet",
                 screenshot_path=bundle.screenshot_path,
                 dom_snapshot_path=bundle.dom_snapshot_path
             )
@@ -39,91 +42,166 @@ class FairplayBetAdapter(BaseSiteAdapter):
         register_btn.click(force=True)
         page.wait_for_timeout(2000)
 
-        # 2. Step 1: Email & Confirm Email
-        log.info("Filling Step 1: Email fields")
-        email_inp = page.locator('input[name="email"], input[id*="email"], input[placeholder*="email" i]').first
-        confirm_email_inp = page.locator('input[name="confirmEmail"], input[name="confirm_email"], input[id*="confirmEmail"]').first
+        # 3. Step 1: Email & Confirm Email
+        log.info("Filling Step 1: Email & Confirm Email")
+        email_inp = page.locator('input#email, input[name="email"]').first
+        confirm_email_inp = page.locator('input#confirmEmail, input[name="confirmEmail"]').first
 
-        if email_inp.is_visible(timeout=5000):
-            email_inp.fill(client.email)
-            if confirm_email_inp.is_visible(timeout=2000):
-                confirm_email_inp.fill(client.email)
+        if not email_inp.is_visible(timeout=5000):
+            bundle = capture_failure_bundle(page, client.client_id, self.site_id, "fairplay_step1_missing")
+            return RegistrationResult(
+                client_id=client.client_id,
+                client_name=client.full_name,
+                site_id=self.site_id,
+                site_name=self.site_name,
+                status=RegistrationStatus.FAILED,
+                email=client.email,
+                error_summary="Fairplay Bet Step 1 email fields not visible",
+                screenshot_path=bundle.screenshot_path
+            )
 
-        # Click Continue / Next if multi-step
-        next_btn = page.locator('button:has-text("Next"), button:has-text("Continue"), button[type="submit"]').first
-        if next_btn.is_visible(timeout=2000):
-            next_btn.click(force=True)
-            page.wait_for_timeout(1500)
+        email_inp.fill(client.email)
+        page.wait_for_timeout(300)
+        confirm_email_inp.fill(client.email)
+        page.wait_for_timeout(500)
 
-        # 3. Step 2: Personal Details (First Name, Last Name, DOB, Phone, Password)
-        log.info("Filling Step 2: Personal Details")
-        fn_inp = page.locator('input[name="firstName"], input[name="first_name"], input[placeholder*="First Name" i]').first
-        ln_inp = page.locator('input[name="lastName"], input[name="last_name"], input[placeholder*="Last Name" i]').first
-        phone_inp = page.locator('input[name="phone"], input[name="mobile"], input[type="tel"], input[placeholder*="Mobile" i]').first
-        pwd_inp = page.locator('input[name="password"], input[type="password"]').first
+        # Click Continue on Step 1
+        step1_cont = page.locator('form button:has-text("Continue"), form button[type="submit"]').first
+        if step1_cont.is_visible(timeout=2000):
+            step1_cont.click(force=True)
+        else:
+            page.locator('button:has-text("Continue"):visible').first.click(force=True)
+        page.wait_for_timeout(2000)
 
-        if fn_inp.is_visible(timeout=3000):
-            fn_inp.fill(client.first_name)
-        if ln_inp.is_visible(timeout=3000):
-            ln_inp.fill(client.last_name)
-        if phone_inp.is_visible(timeout=3000):
-            phone_inp.fill(client.phone)
-        if pwd_inp.is_visible(timeout=3000):
-            pwd_inp.fill(password)
-        
-        # Confirm password if separate field
-        confirm_pwd = page.locator('input[placeholder*="Repeat password" i], input[placeholder*="Confirm password" i], input[name*="confirmPassword" i], input[name*="confirm_password" i]').first
-        if confirm_pwd.is_visible(timeout=2000):
-            confirm_pwd.fill(password)
+        # 4. Step 2: Password & Confirm Password
+        log.info("Filling Step 2: Password & Confirm Password")
+        pwd_inp = page.locator('input#password, input[name="password"]').first
+        confirm_pwd_inp = page.locator('input#confirmPassword, input[name="confirmPassword"]').first
 
-        # DOB Selectors or Inputs
-        dob_day_inp = page.locator('select[name*="day" i], input[name*="day" i]').first
-        dob_month_inp = page.locator('select[name*="month" i], input[name*="month" i]').first
-        dob_year_inp = page.locator('select[name*="year" i], input[name*="year" i]').first
+        if not pwd_inp.is_visible(timeout=4000):
+            bundle = capture_failure_bundle(page, client.client_id, self.site_id, "fairplay_step2_missing")
+            return RegistrationResult(
+                client_id=client.client_id,
+                client_name=client.full_name,
+                site_id=self.site_id,
+                site_name=self.site_name,
+                status=RegistrationStatus.FAILED,
+                email=client.email,
+                password=password,
+                error_summary="Fairplay Bet Step 2 password fields not visible",
+                screenshot_path=bundle.screenshot_path
+            )
 
-        if dob_day_inp.is_visible(timeout=2000):
-            if dob_day_inp.evaluate("el => el.tagName.toLowerCase()") == "select":
-                dob_day_inp.select_option(value=client.dob_day)
-            else:
-                dob_day_inp.fill(client.dob_day)
+        pwd_inp.fill(password)
+        page.wait_for_timeout(300)
+        confirm_pwd_inp.fill(password)
+        page.wait_for_timeout(500)
 
-        if dob_month_inp.is_visible(timeout=2000):
-            if dob_month_inp.evaluate("el => el.tagName.toLowerCase()") == "select":
-                dob_month_inp.select_option(value=client.dob_month)
-            else:
-                dob_month_inp.fill(client.dob_month)
+        # Click Continue on Step 2
+        step2_cont = page.locator('form button:has-text("Continue"), form button[type="submit"]').first
+        if step2_cont.is_visible(timeout=2000):
+            step2_cont.click(force=True)
+        else:
+            page.locator('button:has-text("Continue"):visible').first.click(force=True)
+        page.wait_for_timeout(2500)
 
-        if dob_year_inp.is_visible(timeout=2000):
-            if dob_year_inp.evaluate("el => el.tagName.toLowerCase()") == "select":
-                dob_year_inp.select_option(value=client.dob_year)
-            else:
-                dob_year_inp.fill(client.dob_year)
+        # 5. Step 3: Personal Details, DOB, Phone, Address & Terms
+        log.info("Filling Step 3: Personal Details, DOB, Phone & Address")
+        fn_inp = page.locator('input#firstName, input[name="firstName"]').first
+        ln_inp = page.locator('input#lastName, input[name="lastName"]').first
 
-        # Next Step if needed
-        next_btn = page.locator('button:has-text("Next"), button:has-text("Continue"), button[type="submit"]').first
-        if next_btn.is_visible(timeout=2000):
-            next_btn.click(force=True)
-            page.wait_for_timeout(1500)
+        if not fn_inp.is_visible(timeout=4000):
+            bundle = capture_failure_bundle(page, client.client_id, self.site_id, "fairplay_step3_missing")
+            return RegistrationResult(
+                client_id=client.client_id,
+                client_name=client.full_name,
+                site_id=self.site_id,
+                site_name=self.site_name,
+                status=RegistrationStatus.FAILED,
+                email=client.email,
+                password=password,
+                error_summary="Fairplay Bet Step 3 personal details fields not visible",
+                screenshot_path=bundle.screenshot_path
+            )
 
-        # 4. Step 3: Address & Postcode
-        log.info("Filling Step 3: Address details")
-        postcode_inp = page.locator('input[name*="postcode" i], input[name*="postalCode" i], input[placeholder*="Postcode" i]').first
-        addr1_inp = page.locator('input[name*="address" i], input[placeholder*="Address Line 1" i]').first
-        town_inp = page.locator('input[name*="town" i], input[name*="city" i], input[placeholder*="Town" i]').first
+        fn_inp.fill(client.first_name)
+        page.wait_for_timeout(200)
+        ln_inp.fill(client.last_name)
+        page.wait_for_timeout(200)
 
-        if postcode_inp.is_visible(timeout=3000):
+        # DOB Fields
+        page.locator('input[name="dateOfBirth.day"], input[placeholder="DD"]').first.fill(client.dob_day.zfill(2))
+        page.locator('input[name="dateOfBirth.month"], input[placeholder="MM"]').first.fill(client.dob_month.zfill(2))
+        page.locator('input[name="dateOfBirth.year"], input[placeholder="YYYY"]').first.fill(client.dob_year)
+        page.wait_for_timeout(200)
+
+        # Phone (strip leading 0 and +44 prefix)
+        phone_digits = client.phone.lstrip("+44").lstrip("0")
+        phone_inp = page.locator('input[name="phoneNumber"], input[placeholder*="phone" i]').first
+        if phone_inp.is_visible():
+            phone_inp.fill(phone_digits)
+        page.wait_for_timeout(200)
+
+        # Postcode & Address Lookup
+        postcode_inp = page.locator('input#postcode, input[name="postcode"]').first
+        if postcode_inp.is_visible():
             postcode_inp.fill(client.postcode)
-        if addr1_inp.is_visible(timeout=2000):
-            addr1_inp.fill(client.address_line1)
-        if town_inp.is_visible(timeout=2000):
-            town_inp.fill(client.town_city)
+            page.wait_for_timeout(500)
 
-        # 5. Terms Checkboxes
-        terms_chk = page.locator('input[type="checkbox"][name*="terms" i], input[type="checkbox"][id*="terms" i]').first
-        if terms_chk.is_visible(timeout=2000) and not terms_chk.is_checked():
-            terms_chk.check(force=True)
+            # Click Find Address
+            find_addr_btn = page.locator('button:has-text("Find Address")').first
+            if find_addr_btn.is_visible(timeout=2000):
+                find_addr_btn.click(force=True)
+                page.wait_for_timeout(2000)
 
-        # 6. Check for KYC / CAPTCHA modal
+                # Check for dropdown results
+                first_addr_opt = page.locator('ul li:not(:has-text("Enter Manually"))').first
+                if first_addr_opt.is_visible(timeout=2000):
+                    first_addr_opt.click(force=True)
+                    page.wait_for_timeout(1000)
+                else:
+                    # Click Enter Manually
+                    enter_manual = page.locator('span:has-text("Enter Manually"), li:has-text("Enter Manually")').first
+                    if enter_manual.is_visible(timeout=1500):
+                        enter_manual.click(force=True)
+                        page.wait_for_timeout(1000)
+
+                    # Fill manual address fields
+                    b_num = client.address_line1.split()[0] if client.address_line1 else "1"
+                    b_street = " ".join(client.address_line1.split()[1:]) if " " in client.address_line1 else client.address_line1
+
+                    b_num_inp = page.locator('input[name="buildingNumber"]').first
+                    if b_num_inp.is_visible():
+                        b_num_inp.fill(b_num)
+                    
+                    street_inp = page.locator('input[name="street"]').first
+                    if street_inp.is_visible():
+                        street_inp.fill(b_street)
+
+                    city_inp = page.locator('input[name="townOrCity"]').first
+                    if city_inp.is_visible():
+                        city_inp.fill(client.town_city)
+
+        # Set Marketing Preferences (No to all)
+        for offer_field in ["offers.email", "offers.phone", "offers.sms"]:
+            no_label = page.locator(f'label:has(input[name="{offer_field}"][value="no"])').first
+            if no_label.is_visible(timeout=1000):
+                no_label.click(force=True)
+            else:
+                try:
+                    page.locator(f'input[name="{offer_field}"][value="no"]').first.check(force=True)
+                except Exception:
+                    pass
+
+        # Agree to Terms & Conditions
+        terms_label = page.locator('label[for="termsAccepted"], label:has(input[name="termsAccepted"])').first
+        if terms_label.is_visible(timeout=2000):
+            terms_label.click(force=True)
+        else:
+            page.evaluate("() => { const el = document.querySelector('input[name=\"termsAccepted\"]'); if (el) el.click(); }")
+        page.wait_for_timeout(500)
+
+        # 6. Check for CAPTCHA
         if page.locator('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], div[class*="captcha"]').is_visible(timeout=1500):
             log.warning("CAPTCHA detected on page")
             bundle = capture_failure_bundle(page, client.client_id, self.site_id, "captcha_detected")
@@ -141,21 +219,56 @@ class FairplayBetAdapter(BaseSiteAdapter):
             )
 
         # 7. Final Submit
-        submit_btn = page.locator('button:has-text("Create Account"), button:has-text("Register"), button:has-text("Sign Up"), button[type="submit"]').first
-        log.info("Submitting registration form")
+        submit_btn = page.locator('form button[type="submit"], button:has-text("Next"):visible, button:has-text("Create Account"):visible').first
+        log.info("Submitting Step 3 registration form")
         if submit_btn.is_visible(timeout=3000):
             submit_btn.click(force=True)
-            page.wait_for_timeout(4000)
+            page.wait_for_timeout(6000)
 
-        # 8. Verify Result
+        # 8. Check for Server Error Modal or Duplicate Account
+        error_modal = page.locator('div[role="alert"]:visible, div:has-text("Error"):visible, .error-message:visible').first
+        if error_modal.is_visible(timeout=2000):
+            raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
+            clean_err = extract_clean_error_message(raw_err_text)
+            is_duplicate = is_already_registered_error(raw_err_text)
+
+            if is_duplicate:
+                log.warning(f"⚠️ Fairplay Bet: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
+                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                return RegistrationResult(
+                    client_id=client.client_id,
+                    client_name=client.full_name,
+                    site_id=self.site_id,
+                    site_name=self.site_name,
+                    status=RegistrationStatus.ALREADY_REGISTERED,
+                    email=client.email,
+                    password=password,
+                    error_summary=f"Already registered: {clean_err}",
+                    screenshot_path=bundle.screenshot_path,
+                    dom_snapshot_path=bundle.dom_snapshot_path
+                )
+            else:
+                log.warning(f"Fairplay Bet registration error returned by server: {clean_err}")
+                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(clean_err))
+                return RegistrationResult(
+                    client_id=client.client_id,
+                    client_name=client.full_name,
+                    site_id=self.site_id,
+                    site_name=self.site_name,
+                    status=RegistrationStatus.FAILED,
+                    email=client.email,
+                    password=password,
+                    error_summary=clean_err,
+                    screenshot_path=bundle.screenshot_path,
+                    dom_snapshot_path=bundle.dom_snapshot_path
+                )
+
+        # 9. Verify Result
         auth_indicators = [
             'a:has-text("Deposit")', 'button:has-text("Deposit")',
             'a:has-text("My Account")', 'button:has-text("My Account")',
             '.user-balance', '.account-balance', '[class*="deposit-modal"]'
         ]
-        join_btn = page.locator('button:has-text("Register"), a:has-text("Register")').first
-        is_join_visible = join_btn.is_visible(timeout=1500)
-
         has_auth = False
         for selector in auth_indicators:
             try:
@@ -165,8 +278,11 @@ class FairplayBetAdapter(BaseSiteAdapter):
             except Exception:
                 continue
 
-        if has_auth or not is_join_visible:
-            log.info("Registration confirmed successfully!")
+        # Check if registration drawer closed
+        is_drawer_open = page.locator('form input#firstName, form input#email, input#confirmPassword').first.is_visible(timeout=1500)
+
+        if has_auth and not is_drawer_open:
+            log.info("Fairplay Bet registration confirmed successfully!")
             success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
             return RegistrationResult(
                 client_id=client.client_id,
@@ -181,7 +297,8 @@ class FairplayBetAdapter(BaseSiteAdapter):
                 screenshot_path=success_shot
             )
 
-        # Default fallback capture
+
+        # Fallback failure capture
         bundle = capture_failure_bundle(page, client.client_id, self.site_id, "verify_submission")
         return RegistrationResult(
             client_id=client.client_id,
@@ -194,7 +311,6 @@ class FairplayBetAdapter(BaseSiteAdapter):
             error_summary="Registration was not confirmed by Fairplay Bet",
             screenshot_path=bundle.screenshot_path
         )
-
 
     def login(
         self,
@@ -213,51 +329,132 @@ class FairplayBetAdapter(BaseSiteAdapter):
                 return False, None, "Failed to navigate to Fairplay Bet"
 
             self.accept_cookies(page)
+            page.wait_for_timeout(1000)
 
-            # Check if login modal button exists
-            log_btn = page.locator('button:has-text("Log In"), a:has-text("Log In"), button:has-text("Sign In")').first
-            if log_btn.is_visible(timeout=4000):
+            # Check for a full-page error BEFORE clicking Login
+            # (e.g. if navigation landed on an "already registered" error page)
+            full_page_err = page.locator(
+                'div:has-text("already registered"):visible, '
+                'p:has-text("already registered"):visible, '
+                'div[class*="error"]:visible, div[role="alert"]:visible'
+            ).first
+            if full_page_err.is_visible(timeout=1500):
+                raw = full_page_err.inner_text().strip().replace("\n", " - ")
+                from sites.base import is_already_registered_error, extract_clean_error_message
+                if is_already_registered_error(raw):
+                    log.warning(f"Full-page 'already registered' error before login attempt: {raw[:120]}")
+                    bundle = capture_failure_bundle(page, cid, self.site_id, "fairplay_login_already_registered")
+                    return False, bundle.screenshot_path, f"Already registered error page shown (email may be unverified or account locked): {extract_clean_error_message(raw)}"
+
+            # Click the Login button in the header to open the login drawer
+            # Use a specific header-scoped selector to avoid accidentally clicking Register
+            log_btn = page.locator(
+                'header button:has-text("Login"), '
+                'header a:has-text("Login"), '
+                'nav button:has-text("Login"), '
+                'nav a:has-text("Login")'
+            ).first
+            if log_btn.is_visible(timeout=5000):
                 log_btn.click(force=True)
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(2000)
+            else:
+                log.warning("Login button not found in header/nav; attempting page-wide fallback")
+                # Fallback: any visible Login button that is NOT inside a registration form
+                fallback_btn = page.locator('button:has-text("Login"):visible').first
+                if fallback_btn.is_visible(timeout=3000):
+                    fallback_btn.click(force=True)
+                    page.wait_for_timeout(2000)
 
-            # Target Fairplay login inputs
-            em_inp = page.locator('input[name="email"], input[name="username"], input[type="email"], input[placeholder*="email" i]').first
-            pw_inp = page.locator('input[name="password"], input[type="password"]').first
+            # Scope to the Login Drawer — use specific class fragments to avoid matching registration forms
+            # The login drawer typically has class names like "right-0", "auth", "login", or "max-w-md"
+            drawer = page.locator(
+                'div[class*="login"], '
+                'div[class*="auth"], '
+                'div[class*="fixed right-0"], '
+                'div[class*="max-w-md"]'
+            ).first
+
+            # Target login email & password inputs inside the drawer
+            em_inp = drawer.locator('input[name="email"], input[type="email"], input#email').first
+            pw_inp = drawer.locator('input[name="password"], input[type="password"], input#password').first
+
+            if not em_inp.is_visible(timeout=5000):
+                # Drawer selector may not have matched — fall back to page-level inputs
+                log.warning("Login drawer not matched by class selector; falling back to page-level inputs")
+                em_inp = page.locator('input[name="email"], input[type="email"]').first
+                pw_inp = page.locator('input[name="password"], input[type="password"]').first
 
             if not em_inp.is_visible(timeout=4000) or not pw_inp.is_visible(timeout=4000):
                 bundle = capture_failure_bundle(page, cid, self.site_id, "fairplay_login_missing")
-                return False, bundle.screenshot_path, "Fairplay Bet login inputs not found"
+                return False, bundle.screenshot_path, "Fairplay Bet login inputs not found after opening login drawer"
 
             em_inp.fill(username_or_email)
+            page.wait_for_timeout(300)
             pw_inp.fill(password)
             page.wait_for_timeout(500)
 
-            # Click Log In submit
-            submit_btn = page.locator('button:has-text("Log In"), button:has-text("Login"), button[type="submit"]').first
+            # Click the Login submit button inside the drawer
+            submit_btn = page.locator(
+                'button[type="submit"]:has-text("Login"):visible, '
+                'button:has-text("Log in"):visible, '
+                'button:has-text("Sign in"):visible'
+            ).first
             if submit_btn.is_visible(timeout=3000):
+                log.info("Clicking Fairplay Bet login submit button")
                 submit_btn.click(force=True)
             else:
+                log.info("Submit button not found — pressing Enter on password input")
                 pw_inp.press("Enter")
 
             page.wait_for_timeout(5000)
 
-            # Dismiss any welcome / deposit dialogs
-            close_btn = page.locator('button[aria-label="Close"], button:has-text("Close"), button:has-text("Maybe Later"), .modal-close').first
-            if close_btn.is_visible(timeout=2000):
-                try:
-                    close_btn.click(force=True)
-                    page.wait_for_timeout(1000)
-                except Exception:
-                    pass
-
-            # Capture proof
+            # Capture diagnostic proof screenshot
             from core.logger import capture_login_proof_screenshot
             proof_path = capture_login_proof_screenshot(page, cid, self.site_id)
             log.info(f"Fairplay Bet login proof captured: {proof_path}")
-            return True, proof_path, None
+
+            # --- Check 1: Full-page error (e.g. "already registered" banner outside drawer) ---
+            full_page_err_after = page.locator(
+                'div:has-text("already registered"):visible, '
+                'p:has-text("already registered"):visible, '
+                '[class*="error-page"]:visible'
+            ).first
+            if full_page_err_after.is_visible(timeout=1500):
+                raw = full_page_err_after.inner_text().strip().replace("\n", " - ")
+                from sites.base import extract_clean_error_message
+                msg = extract_clean_error_message(raw)
+                log.warning(f"Full-page error after login attempt: {msg}")
+                return False, proof_path, f"Login error (full-page): {msg}"
+
+            # --- Check 2: Inline drawer errors (Invalid credentials, unverified, etc.) ---
+            err_el = page.locator(
+                'div[role="alert"]:visible, '
+                '.error-message:visible, '
+                'p:has-text("Invalid"):visible, '
+                'p:has-text("incorrect"):visible, '
+                'div:has-text("not verified"):visible'
+            ).first
+            if err_el.is_visible(timeout=2000):
+                err_text = err_el.inner_text().strip().replace("\n", " - ")
+                log.warning(f"Fairplay Bet login rejected (inline error): {err_text}")
+                return False, proof_path, f"Login rejected: {err_text}"
+
+            # --- Check 3: Authenticated state indicators ---
+            has_deposit = page.locator('button:has-text("Deposit"), a:has-text("Deposit")').first.is_visible(timeout=3000)
+            has_account = page.locator('a:has-text("My Account"), button:has-text("My Account"), .user-balance').first.is_visible(timeout=2000)
+            pw_still_visible = page.locator('input[type="password"]:visible').first.is_visible(timeout=1000)
+
+            if (has_deposit or has_account) and not pw_still_visible:
+                log.info("Fairplay Bet login successfully verified")
+                return True, proof_path, None
+            else:
+                log.warning("Fairplay Bet login failed: authenticated account indicators not found")
+                return False, proof_path, "Login failed: account dashboard not reached — account may require email verification"
 
         except Exception as e:
             log.error(f"Fairplay Bet login error: {e}")
             bundle = capture_failure_bundle(page, cid, self.site_id, "fairplay_login_error", e)
             return False, bundle.screenshot_path, str(e)
+
+
 

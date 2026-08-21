@@ -174,3 +174,50 @@ class ExcelDataProvider(BaseDataProvider):
         """Logs failure into console and state (Excel results sheet focuses on successful accounts)."""
         logger.warning(f"Registration failure recorded for {result.client_name} on {result.site_name}: {result.error_summary}")
         return True
+
+    def remove_success(self, client_name: str, site_name: str, email: str = "") -> int:
+        """
+        Removes any matching rows from the successful registrations sheet.
+        Returns the count of deleted rows.
+        """
+        try:
+            wb = self._get_or_create_workbook()
+            target_sheet = None
+            for name in wb.sheetnames:
+                if name.strip().lower() in (self.output_sheet_name.strip().lower(), "successful signups", "succesful signuos"):
+                    target_sheet = wb[name]
+                    break
+
+            if not target_sheet or target_sheet.max_row <= 1:
+                return 0
+
+            # Scan from bottom to top to safely delete rows
+            deleted_count = 0
+            c_name_clean = client_name.strip().lower()
+            site_clean = site_name.strip().lower()
+            email_clean = email.strip().lower() if email else ""
+
+            for row_idx in range(target_sheet.max_row, 1, -1):
+                row_name = str(target_sheet.cell(row_idx, 1).value or "").strip().lower()
+                row_site = str(target_sheet.cell(row_idx, 2).value or "").strip().lower()
+                row_email = str(target_sheet.cell(row_idx, 3).value or "").strip().lower()
+
+                # Match by Name + Site or Email + Site
+                name_match = (row_name == c_name_clean or c_name_clean in row_name or row_name in c_name_clean) and (row_site == site_clean or site_clean in row_site)
+                email_match = (email_clean and row_email == email_clean) and (row_site == site_clean or site_clean in row_site)
+
+                if name_match or email_match:
+                    logger.info(f"Removing invalid registration row {row_idx} ({row_name}, {row_site}) from {self.file_path.name}")
+                    target_sheet.delete_rows(row_idx, 1)
+                    deleted_count += 1
+
+            if deleted_count > 0:
+                wb.save(str(self.file_path))
+                logger.info(f"Successfully deleted {deleted_count} row(s) from Excel '{target_sheet.title}'")
+
+            return deleted_count
+
+        except Exception as e:
+            logger.error(f"Failed to remove false positive record from Excel: {e}")
+            return 0
+
