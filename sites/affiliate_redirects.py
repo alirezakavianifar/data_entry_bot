@@ -69,8 +69,24 @@ class AffiliateRedirectAdapter(BaseSiteAdapter):
             page.wait_for_timeout(4000)
 
         # 5. Success Confirmation & Proof
-        body_text = page.inner_text("body").lower()
-        if "welcome" in body_text or "deposit" in body_text or "account" in body_text:
+        auth_indicators = [
+            'a:has-text("Deposit")', 'button:has-text("Deposit")',
+            'a:has-text("My Account")', 'button:has-text("My Account")',
+            '.user-balance', '.account-balance', '[class*="deposit-modal"]'
+        ]
+        join_btn = page.locator('a:has-text("Sign Up"), button:has-text("Sign Up"), a:has-text("Register"), button:has-text("Register"), a:has-text("Join")').first
+        is_join_visible = join_btn.is_visible(timeout=1500)
+
+        has_auth = False
+        for selector in auth_indicators:
+            try:
+                if page.locator(selector).first.is_visible(timeout=1500):
+                    has_auth = True
+                    break
+            except Exception:
+                continue
+
+        if has_auth or not is_join_visible:
             log.info(f"{self.site_name} registration confirmed successfully!")
             success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
             return RegistrationResult(
@@ -92,9 +108,11 @@ class AffiliateRedirectAdapter(BaseSiteAdapter):
             client_name=client.full_name,
             site_id=self.site_id,
             site_name=self.site_name,
-            status=RegistrationStatus.SUCCESS,
+            status=RegistrationStatus.FAILED,
             email=client.email,
             password=password,
-            account_reference=f"{self.site_name}-Submitted",
+            account_reference=f"{self.site_name}-Failed",
+            error_summary=f"Registration was not confirmed by {self.site_name}",
             screenshot_path=bundle.screenshot_path
         )
+

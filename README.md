@@ -8,10 +8,18 @@ Includes both a **Modern Desktop GUI Application** and a **Command-Line Interfac
 
 ## Features
 
+- **Automated & On-Demand Post-Registration Login Verification:**
+  - Automatically logs into the bookmaker account immediately upon successful registration to verify authentication and capture definitive logged-in dashboard proof (`_LOGIN_PROOF.png`).
+  - **Desktop GUI Registered Accounts Hub:**
+    - Displays `🔐 Verified` vs `⏳ Unverified` badges per registered account.
+    - **`🔑 Verify` Button:** Triggers on-demand login execution in a background worker thread, tests authentication live, updates the database, and captures a fresh proof image.
+    - **`🖼️ Proof` Button:** Opens the high-resolution logged-in screen proof immediately in the default viewer or Explorer.
+    - **`📋 Copy` Button:** One-click clipboard copy for the generated password.
 - **Modern Desktop GUI Application (`gui_app.py` / `run_desktop_app.bat`):**
   - Sleek dark theme interface with intuitive controls.
   - Interactive Data Source picker (`Excel` file browser vs `Google Sheets` URL).
   - Target website checklist with quick selection filters.
+  - Auto-Verify via Login toggle switch.
   - Real-time animated progress bar, status badges, and live statistics counters.
   - Multi-threaded execution keeping the UI smooth while Playwright runs.
   - Embedded real-time console log with autoscroll.
@@ -24,9 +32,10 @@ Includes both a **Modern Desktop GUI Application** and a **Command-Line Interfac
 - **Multi-Modal Diagnostic & Failure Logging:**
   - Standardized console logs and rolling `logs/bot.log`.
   - Dedicated `logs/error.log` for warnings and errors with stack traces.
+  - Visual proof screenshots (`logs/artifacts/<timestamp>_<client>_<site>_LOGIN_PROOF.png`).
   - Automatic failure bundles in `logs/artifacts/` capturing full-page `.png` screenshots, raw HTML DOM snapshots (`.html`), and Playwright trace archives (`.zip`).
 - **Resilient & Idempotent State Management (`core/state.py`):**
-  - Tracks registration states (`PENDING`, `IN_PROGRESS`, `SUCCESS`, `FAILED`, `MANUAL_REVIEW`, `SKIPPED`) in SQLite (`state.db`).
+  - Tracks registration and login verification states (`PENDING`, `IN_PROGRESS`, `SUCCESS`, `FAILED`, `MANUAL_REVIEW`, `SKIPPED`) in SQLite (`state.db`).
   - Safely resumes interrupted jobs without repeating already completed accounts.
 - **Strong Password & Username Generator (`core/password_gen.py`):**
   - Generates secure, compliant passwords satisfying uppercase, lowercase, numeric, and special character policies.
@@ -44,13 +53,13 @@ data_entry_bot/
 │
 ├── config/
 │   ├── promo_links.json         # Configurable promo URLs & affiliate mapping
-│   └── settings.py              # Application settings, timeouts, logging config
+│   └── settings.py              # Application settings, timeouts, login verify config
 │
 ├── core/
-│   ├── logger.py                # Multi-sink logging & FailureBundle capturer
+│   ├── logger.py                # Multi-sink logging & Login Proof capturer
 │   ├── browser.py               # Playwright browser manager (Headed/Headless + Tracing)
-│   ├── engine.py                # Core orchestration engine (Client × Site matrix)
-│   ├── state.py                 # SQLite persistent state tracker
+│   ├── engine.py                # Core orchestration engine & verify_single_account helper
+│   ├── state.py                 # SQLite persistent state tracker & login verification store
 │   └── password_gen.py          # Compliant strong password & username generator
 │
 ├── data/
@@ -67,31 +76,32 @@ data_entry_bot/
 │
 ├── sites/
 │   ├── __init__.py              # Site adapter registry & factory
-│   ├── base.py                  # BaseSiteAdapter lifecycle & error handling
-│   ├── fairplaybet.py           # Fairplay Bet adapter (Stage 1 Live Experiment Site)
-│   ├── betfred.py               # Betfred registration adapter (Stage 2)
-│   ├── quinnbet.py              # QuinnBet registration adapter (Stage 2)
-│   ├── bresbet.py               # BresBet registration adapter (Stage 2)
-│   ├── planetsportbet.py        # Planet Sport Bet adapter (Stage 2)
-│   ├── starsports.py            # Star Sports (OLBG outbound) adapter (Stage 2)
-│   ├── betgoodwin.py            # Betgoodwin (OddsMonkey outbound) adapter (Stage 2)
-│   └── affiliate_redirects.py   # Betting Lounge affiliate redirect handler (Stage 2)
+│   ├── base.py                  # BaseSiteAdapter lifecycle, login verification & error handling
+│   ├── fairplaybet.py           # Fairplay Bet registration & login adapter
+│   ├── betfred.py               # Betfred registration & login adapter
+│   ├── quinnbet.py              # QuinnBet registration & login adapter
+│   ├── bresbet.py               # BresBet registration & login adapter
+│   ├── planetsportbet.py        # Planet Sport Bet registration & login adapter
+│   ├── starsports.py            # Star Sports registration & login adapter
+│   ├── betgoodwin.py            # Betgoodwin registration & login adapter
+│   └── affiliate_redirects.py   # Betting Lounge affiliate redirect handler
 │
 ├── logs/
 │   ├── bot.log                  # Rolling operational log
 │   ├── error.log                # Filtered error-only log with stack traces
-│   └── artifacts/               # Full-page screenshots (.png), DOM dumps (.html), Traces (.zip)
+│   └── artifacts/               # Login proof screenshots, DOM dumps, traces
 │
 ├── tests/                       # Pytest unit & integration test suite
 │   ├── test_models.py
 │   ├── test_excel_provider.py
 │   ├── test_password_gen.py
 │   ├── test_state.py
+│   ├── test_single_instance.py
 │   └── test_gui.py
 │
 ├── Test.xlsx                    # Sample test workbook
 ├── .env.example                 # Environment configuration template
-├── gui_app.py                   # Desktop GUI entry point
+├── gui_app.py                   # Desktop GUI entry point (single-instance mutex)
 ├── run_desktop_app.bat          # Desktop 1-click launcher for GUI
 ├── app.py                       # CLI entry point
 ├── run_bot.bat                  # Desktop 1-click batch runner (CLI)
@@ -114,7 +124,7 @@ data_entry_bot/
   ```powershell
   python app.py --dry-run --source excel --input Test.xlsx
   ```
-- **Run Visible Automation on Fairplay Bet:**
+- **Run Automation on Fairplay Bet:**
   ```powershell
   python app.py --headed --source excel --input Test.xlsx --sites fairplaybet --limit 5
   ```
@@ -122,6 +132,21 @@ data_entry_bot/
   ```powershell
   python app.py --headed --source sheets --limit 20
   ```
+
+---
+
+## Login Verification Workflow
+
+1. **Automatic Mode (During Registration):**
+   - When a client account registration succeeds and `AUTO_VERIFY_LOGIN=true` (or the GUI switch is active), the engine creates a clean browser context.
+   - The bot navigates to the bookmaker, clicks Log In, inputs the client's email/username and password, and submits.
+   - It checks for authenticated user indicators (account balance, wallet widget, profile avatar, logout CTA).
+   - Upon successful verification, it captures a high-resolution screenshot saved as `<timestamp>_<client_id>_<site_id>_LOGIN_PROOF.png` and updates the SQLite database with `login_verified = 1`.
+2. **On-Demand Manual Verification (Desktop GUI):**
+   - Open the **✅ Registered Accounts** tab in the Desktop GUI.
+   - Beside any registered account, click **`🔑 Verify`**.
+   - A background thread launches Playwright, logs into the site, captures the new proof image, and updates the status to `🔐 Verified`.
+   - Click **`🖼️ Proof`** to instantly open and view the verified screenshot.
 
 ---
 
@@ -147,8 +172,9 @@ playwright install chromium
 
 - **General Logs:** Check `logs/bot.log` for step-by-step breadcrumbs and timings.
 - **Errors Only:** Check `logs/error.log` for stack traces and failed selector messages.
-- **Visual Failure Artifacts (`logs/artifacts/`):**
-  - When any step fails, inspect the `.png` screenshot and `.html` DOM snapshot.
+- **Visual Failure & Proof Artifacts (`logs/artifacts/`):**
+  - High-res logged-in proof: `<timestamp>_<client>_<site>_LOGIN_PROOF.png`
+  - When any step fails: `<timestamp>_<client>_<site>_<step>.png` and `.html` DOM snapshot.
   - Open traces: `playwright show-trace logs/artifacts/<trace_file>.zip`.
 
 ---
@@ -159,4 +185,5 @@ Run the complete pytest test suite:
 ```powershell
 pytest
 ```
-All 8 unit tests verify phone normalization, datetime DOB handling, password complexity, state management, Excel provider reading/writing, and GUI initialization.
+All unit tests verify phone normalization, datetime DOB handling, password complexity, state management, login verification records, Excel provider reading/writing, and GUI initialization.
+

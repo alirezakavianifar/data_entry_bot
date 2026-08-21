@@ -158,3 +158,21 @@ def capture_success_screenshot(page, client_id: str, site_id: str) -> Optional[s
         logger.warning(f"Failed to capture success screenshot: {e}")
     return None
 
+
+def capture_login_proof_screenshot(page, client_id: str, site_id: str) -> Optional[str]:
+    """Captures a full-page / high-fidelity screenshot of the user's logged-in state as definitive proof."""
+    now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    clean_client = "".join(c for c in client_id if c.isalnum() or c in ("-", "_")) or "unknown"
+    clean_site = "".join(c for c in site_id if c.isalnum() or c in ("-", "_")) or "site"
+    screenshot_path = ARTIFACTS_DIR / f"{now}_{clean_client}_{clean_site}_LOGIN_PROOF.png"
+
+    try:
+        if page and not page.is_closed():
+            page.screenshot(path=str(screenshot_path), full_page=True, timeout=8000)
+            logger.info(f"Visual login proof captured: {screenshot_path.name}")
+            return str(screenshot_path)
+    except Exception as e:
+        logger.warning(f"Failed to capture login proof screenshot: {e}")
+    return None
+
+

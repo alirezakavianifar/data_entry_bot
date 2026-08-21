@@ -1,8 +1,9 @@
 import time
+from typing import Optional
 from playwright.sync_api import Page
 from sites.base import BaseSiteAdapter
 from data.models import Client, RegistrationResult, RegistrationStatus
-from core.logger import get_logger, capture_failure_bundle, capture_success_screenshot
+from core.logger import get_logger, capture_failure_bundle, capture_success_screenshot, capture_login_proof_screenshot
 
 
 class QuinnbetAdapter(BaseSiteAdapter):
@@ -18,82 +19,295 @@ class QuinnbetAdapter(BaseSiteAdapter):
 
     def fill_registration(self, page: Page, client: Client, password: str) -> RegistrationResult:
         log = get_logger(client_id=client.client_id, site_id=self.site_id, step="fill_registration")
-        log.info("Starting QuinnBet registration")
+        log.info(f"Starting QuinnBet multi-step registration for {client.full_name}")
 
-        # 1. Cookiebot Consent Handling
-        cookie_btn = page.locator('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll, #CybotCookiebotDialogBodyButtonAccept, button:has-text("Allow all"), button:has-text("Accept")').first
-        if cookie_btn.is_visible(timeout=4000):
-            log.info("Accepting Cookiebot consent on QuinnBet")
-            cookie_btn.click(force=True)
-            page.wait_for_timeout(1500)
+        try:
+            # 1. Cookiebot Consent Handling
+            cookie_btn = page.locator('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll, #CybotCookiebotDialogBodyButtonAccept, button:has-text("Allow all"), button:has-text("Accept")').first
+            if cookie_btn.is_visible(timeout=3000):
+                log.info("Accepting Cookiebot consent on QuinnBet")
+                cookie_btn.click(force=True)
+                page.wait_for_timeout(1000)
 
-        # 2. Locate and click Register / Join CTA
-        reg_btn = page.locator('a:has-text("Register"), button:has-text("Register"), a:has-text("Join Now"), button:has-text("Join Now"), a:has-text("Sign Up")').first
-        if reg_btn.is_visible(timeout=5000):
-            log.info("Clicking Register CTA on QuinnBet")
-            reg_btn.click(force=True)
-            page.wait_for_timeout(3000)
+            # 2. Locate and click Register / Join CTA
+            if not page.url.endswith("/register"):
+                reg_btn = page.locator('button[data-testid="register-button"], a[href*="/register"], a:has-text("JOIN"), button:has-text("JOIN"), a:has-text("Register")').first
+                if reg_btn.is_visible(timeout=4000):
+                    log.info("Clicking Register CTA on QuinnBet")
+                    reg_btn.click(force=True)
+                    page.wait_for_timeout(2500)
 
-        # 3. Form fields population
-        fn = page.locator('input[name*="firstName" i], input[id*="firstName" i], input[placeholder*="First Name" i]').first
-        ln = page.locator('input[name*="lastName" i], input[id*="lastName" i], input[placeholder*="Last Name" i]').first
-        em = page.locator('input[name*="email" i], input[id*="email" i], input[type="email"]').first
-        ph = page.locator('input[name*="phone" i], input[name*="mobile" i], input[type="tel"]').first
-        pwd = page.locator('input[name*="password" i], input[type="password"]').first
+            # 3. Step 1: Credentials (Email & Password)
+            step1_inputs = page.locator("form app-reg-step-one input, form input.mat-input-element, form input.form-field__input").all()
+            if len(step1_inputs) < 2:
+                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "step1_inputs_missing")
+                return RegistrationResult(
+                    client_id=client.client_id,
+                    client_name=client.full_name,
+                    site_id=self.site_id,
+                    site_name=self.site_name,
+                    status=RegistrationStatus.FAILED,
+                    email=client.email,
+                    password=password,
+                    error_summary="QuinnBet Step 1 inputs missing",
+                    screenshot_path=bundle.screenshot_path
+                )
 
-        if fn.is_visible(timeout=4000):
-            fn.fill(client.first_name)
-        if ln.is_visible(timeout=3000):
-            ln.fill(client.last_name)
-        if em.is_visible(timeout=3000):
-            em.fill(client.email)
-        if ph.is_visible(timeout=3000):
-            ph.fill(client.phone)
-        if pwd.is_visible(timeout=3000):
-            pwd.fill(password)
+            log.info(f"Filling Step 1 credentials for {client.email}")
+            step1_inputs[0].fill(client.email)
+            step1_inputs[1].fill(password)
+            page.wait_for_timeout(500)
 
-        # Postcode & terms
-        postcode = page.locator('input[name*="postcode" i], input[id*="postcode" i]').first
-        if postcode.is_visible(timeout=2000):
-            postcode.fill(client.postcode)
+            create_acc_btn = page.locator('button:has-text("CREATE ACCOUNT"), button:has-text("CONTINUE"), form button[type="button"]:has-text("CREATE")').first
+            if create_acc_btn.is_visible(timeout=2000):
+                create_acc_btn.click(force=True)
+                page.wait_for_timeout(3500)
 
-        terms = page.locator('input[type="checkbox"][name*="terms" i], input[type="checkbox"][id*="terms" i]').first
-        if terms.is_visible(timeout=2000) and not terms.is_checked():
-            terms.check(force=True)
+            # Check for Step 1 validation error
+            step1_err = page.locator('div.alert-danger, span.error-message, mat-error, p.error').first
+            if step1_err.is_visible(timeout=1000):
+                err_text = step1_err.inner_text().strip()
+                if any(kw in err_text.lower() for kw in ["already exists", "in use", "invalid", "taken"]):
+                    log.warning(f"QuinnBet Step 1 validation error: {err_text}")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "step1_error", Exception(err_text))
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.FAILED,
+                        email=client.email,
+                        password=password,
+                        error_summary=f"Step 1 error: {err_text}",
+                        screenshot_path=bundle.screenshot_path
+                    )
 
-        # 4. Submit Registration
-        submit_btn = page.locator('button:has-text("Create Account"), button:has-text("Register"), button:has-text("Join"), button[type="submit"]').first
-        if submit_btn.is_visible(timeout=3000):
-            submit_btn.click(force=True)
-            page.wait_for_timeout(4000)
+            # 4. Step 2: Personal Details
+            gender_btn = page.locator('mat-button-toggle:has-text("MALE"), button:has-text("MALE")').first
+            if gender_btn.is_visible(timeout=2000):
+                gender_btn.click(force=True)
 
-        # 5. Success Proof & Return
-        body_text = page.inner_text("body").lower()
-        if "welcome" in body_text or "deposit" in body_text or "account" in body_text:
-            log.info("QuinnBet registration confirmed successfully!")
-            success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
+            step2_inputs = page.locator("app-reg-step-two input").all()
+            if len(step2_inputs) >= 4:
+                log.info("Filling Step 2 Personal Details (Name, Phone, Postcode)")
+                step2_inputs[0].fill(client.first_name)
+                step2_inputs[1].fill(client.last_name)
+                step2_inputs[2].fill(client.phone)
+                step2_inputs[3].fill(client.postcode)
+                page.wait_for_timeout(500)
+
+            # DOB Dropdowns
+            dob_days = page.locator('select-dropdown[formcontrolname="date"], select[formcontrolname="date"]').first
+            dob_months = page.locator('select-dropdown[formcontrolname="month"], select[formcontrolname="month"]').first
+            dob_years = page.locator('select-dropdown[formcontrolname="year"], select[formcontrolname="year"]').first
+
+            if dob_days.is_visible(timeout=1500):
+                try:
+                    dob_days.click(force=True)
+                    page.wait_for_timeout(300)
+                    page.locator(f'li:has-text("{client.dob_day}"), div:has-text("{client.dob_day}")').first.click(force=True)
+                except Exception:
+                    pass
+
+            if dob_months.is_visible(timeout=1500):
+                try:
+                    dob_months.click(force=True)
+                    page.wait_for_timeout(300)
+                    page.locator(f'li:has-text("{client.dob_month:02d}"), div:has-text("{client.dob_month:02d}")').first.click(force=True)
+                except Exception:
+                    pass
+
+            if dob_years.is_visible(timeout=1500):
+                try:
+                    dob_years.click(force=True)
+                    page.wait_for_timeout(300)
+                    page.locator(f'li:has-text("{client.dob_year}"), div:has-text("{client.dob_year}")').first.click(force=True)
+                except Exception:
+                    pass
+
+            # Address item selection if populated
+            addr_item = page.locator('li[class*="address"], div[class*="address-item"], mat-option').first
+            if addr_item.is_visible(timeout=2000):
+                addr_item.click(force=True)
+                page.wait_for_timeout(500)
+
+            # Step 2 Submit: Continue button
+            continue_btn = page.locator('#registerModalSubmitBtn, button:has-text("CONTINUE"), button[type="submit"]:has-text("CONTINUE")').first
+            if continue_btn.is_visible(timeout=3000):
+                log.info("Submitting Step 2 via CONTINUE button")
+                continue_btn.click(force=True)
+                page.wait_for_timeout(5000)
+
+            # Check if there is a Step 3 / Terms checkbox
+            terms_chk = page.locator('input[type="checkbox"], mat-checkbox').first
+            if terms_chk.is_visible(timeout=2000):
+                try:
+                    terms_chk.click(force=True)
+                    page.wait_for_timeout(500)
+                except Exception:
+                    pass
+
+            final_btn = page.locator('button:has-text("Complete"), button:has-text("Join Now"), button:has-text("Register"), button[type="submit"]').first
+            if final_btn.is_visible(timeout=2000):
+                final_btn.click(force=True)
+                page.wait_for_timeout(5000)
+
+            # 5. Confirm Registration Success
+            auth_indicators = [
+                'a:has-text("Deposit")', 'button:has-text("Deposit")',
+                'a:has-text("My Account")', 'button:has-text("My Account")',
+                '[data-testid*="user-menu"]', '[data-testid*="balance"]',
+                '.user-balance', '.account-balance', '[class*="deposit-modal"]'
+            ]
+            join_btn = page.locator('button[data-testid="register-button"], a[data-testid="register-button"], button:has-text("JOIN")').first
+            is_join_visible = join_btn.is_visible(timeout=1500)
+
+            has_auth = False
+            for selector in auth_indicators:
+                try:
+                    if page.locator(selector).first.is_visible(timeout=1500):
+                        has_auth = True
+                        break
+                except Exception:
+                    continue
+
+            if has_auth or not is_join_visible:
+                log.info("QuinnBet registration confirmed successfully!")
+                success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
+                return RegistrationResult(
+                    client_id=client.client_id,
+                    client_name=client.full_name,
+                    site_id=self.site_id,
+                    site_name=self.site_name,
+                    status=RegistrationStatus.SUCCESS,
+                    email=client.email,
+                    username=client.email,
+                    password=password,
+                    account_reference="QuinnBet-Direct",
+                    screenshot_path=success_shot
+                )
+            else:
+                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "verify_submission")
+                log.warning("QuinnBet registration submission could not be confirmed")
+                return RegistrationResult(
+                    client_id=client.client_id,
+                    client_name=client.full_name,
+                    site_id=self.site_id,
+                    site_name=self.site_name,
+                    status=RegistrationStatus.FAILED,
+                    email=client.email,
+                    password=password,
+                    error_summary="Registration was not confirmed by QuinnBet",
+                    screenshot_path=bundle.screenshot_path
+                )
+
+        except Exception as e:
+            log.error(f"Registration error on QuinnBet: {e}")
+            bundle = capture_failure_bundle(page, client.client_id, self.site_id, "registration_exception", e)
             return RegistrationResult(
                 client_id=client.client_id,
                 client_name=client.full_name,
                 site_id=self.site_id,
                 site_name=self.site_name,
-                status=RegistrationStatus.SUCCESS,
+                status=RegistrationStatus.FAILED,
                 email=client.email,
-                username=client.email,
                 password=password,
-                account_reference="QuinnBet-Direct",
-                screenshot_path=success_shot
+                error_summary=str(e),
+                screenshot_path=bundle.screenshot_path
             )
 
-        bundle = capture_failure_bundle(page, client.client_id, self.site_id, "verify_submission")
-        return RegistrationResult(
-            client_id=client.client_id,
-            client_name=client.full_name,
-            site_id=self.site_id,
-            site_name=self.site_name,
-            status=RegistrationStatus.SUCCESS,
-            email=client.email,
-            password=password,
-            account_reference="QuinnBet-Submitted",
-            screenshot_path=bundle.screenshot_path
-        )
+    def login(
+        self,
+        page: Page,
+        username_or_email: str,
+        password: str,
+        client_id: Optional[str] = None
+    ) -> tuple[bool, Optional[str], Optional[str]]:
+        """Specialized login verification handler for QuinnBet."""
+        cid = client_id or "client"
+        log = get_logger(client_id=cid, site_id=self.site_id, step="login")
+        log.info(f"Navigating to QuinnBet sports page for login: https://www.quinnbet.com/uk/sports")
+
+        try:
+            page.goto("https://www.quinnbet.com/uk/sports", wait_until="domcontentloaded", timeout=25000)
+            page.wait_for_timeout(2500)
+
+            # Accept OneTrust cookies if present
+            ot_btn = page.locator('#onetrust-accept-btn-handler, button:has-text("Accept All Cookies")').first
+            if ot_btn.is_visible(timeout=2500):
+                log.info("Accepting OneTrust cookie consent on QuinnBet")
+                ot_btn.click(force=True)
+                page.wait_for_timeout(1000)
+
+            # Click LOG IN button
+            login_btn = page.locator('button[data-testid="login-button"], a[data-testid="login-button"], button:has-text("LOG IN")').first
+            if login_btn.is_visible(timeout=4000):
+                log.info("Clicking LOG IN button on QuinnBet")
+                login_btn.click(force=True)
+                page.wait_for_timeout(2500)
+
+            # Locate username / email & password inputs inside app-login
+            email_inp = page.locator("app-login input[type='email'], app-login #txtEmail input, app-login input.mat-input-element").first
+            pwd_inp = page.locator("app-login input[type='password'], app-login #txtPassword input").first
+
+            if not email_inp.is_visible(timeout=4000) or not pwd_inp.is_visible(timeout=4000):
+                bundle = capture_failure_bundle(page, cid, self.site_id, "login_inputs_missing")
+                return False, bundle.screenshot_path, "QuinnBet login inputs not visible"
+
+            log.info(f"Filling credentials for {username_or_email}")
+            email_inp.fill(username_or_email)
+            pwd_inp.fill(password)
+            page.wait_for_timeout(500)
+
+            submit_btn = page.locator("app-login button:has-text('LOG IN'), app-login button[type='submit']").first
+            if submit_btn.is_visible(timeout=2000):
+                submit_btn.click(force=True)
+            else:
+                pwd_inp.press("Enter")
+
+            page.wait_for_timeout(5000)
+
+            proof_path = capture_login_proof_screenshot(page, cid, self.site_id)
+
+            # Check if login modal is still present
+            login_modal = page.locator("app-login, .login-modal, .loginModal").first
+            is_modal_open = False
+            try:
+                if login_modal.is_visible(timeout=1500):
+                    is_modal_open = True
+            except Exception:
+                pass
+
+            auth_indicators = [
+                'a:has-text("Deposit")', 'button:has-text("Deposit")',
+                'a:has-text("My Account")', 'button:has-text("My Account")',
+                '[data-testid*="user-menu"]', '[data-testid*="balance"]',
+                '.user-balance', '.account-balance', '.wallet-balance'
+            ]
+            is_authenticated = False
+            for selector in auth_indicators:
+                try:
+                    if page.locator(selector).first.is_visible(timeout=1000):
+                        is_authenticated = True
+                        break
+                except Exception:
+                    continue
+
+            # Check for error message
+            err_el = page.locator('app-login .alert, app-login .error, app-login mat-error, div.alert-danger').first
+            err_msg = None
+            if err_el.is_visible(timeout=1000):
+                err_msg = err_el.inner_text().strip()
+
+            if is_authenticated or (not is_modal_open and not err_msg):
+                log.info(f"QuinnBet login successfully verified! Proof: {proof_path}")
+                return True, proof_path, None
+            else:
+                summary = err_msg or "Login failed: Credentials rejected (login modal remained open)"
+                log.warning(f"QuinnBet login failed: {summary}")
+                return False, proof_path, summary
+
+        except Exception as e:
+            log.error(f"QuinnBet login error: {e}")
+            bundle = capture_failure_bundle(page, cid, self.site_id, "login_exception", e)
+            return False, bundle.screenshot_path, str(e)

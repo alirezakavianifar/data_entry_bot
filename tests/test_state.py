@@ -37,9 +37,22 @@ def test_state_manager_lifecycle():
         summary = mgr.get_summary()
         assert summary[RegistrationStatus.SUCCESS.value] == 1
 
+        # Test login verification update
+        mgr.update_login_verification(
+            client_id="CLI_001",
+            site_id="fairplaybet",
+            success=True,
+            screenshot_path="/path/to/LOGIN_PROOF.png"
+        )
+        rec = mgr.get_record("CLI_001", "fairplaybet")
+        assert rec is not None
+        assert rec["login_verified"] == 1
+        assert rec["login_screenshot_path"] == "/path/to/LOGIN_PROOF.png"
+
     finally:
         if db_path.exists():
             try:
                 db_path.unlink()
             except Exception:
                 pass
+

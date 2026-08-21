@@ -70,6 +70,11 @@ class FairplayBetAdapter(BaseSiteAdapter):
             phone_inp.fill(client.phone)
         if pwd_inp.is_visible(timeout=3000):
             pwd_inp.fill(password)
+        
+        # Confirm password if separate field
+        confirm_pwd = page.locator('input[placeholder*="Repeat password" i], input[placeholder*="Confirm password" i], input[name*="confirmPassword" i], input[name*="confirm_password" i]').first
+        if confirm_pwd.is_visible(timeout=2000):
+            confirm_pwd.fill(password)
 
         # DOB Selectors or Inputs
         dob_day_inp = page.locator('select[name*="day" i], input[name*="day" i]').first
@@ -95,7 +100,7 @@ class FairplayBetAdapter(BaseSiteAdapter):
                 dob_year_inp.fill(client.dob_year)
 
         # Next Step if needed
-        next_btn = page.locator('button:has-text("Next"), button:has-text("Continue")').first
+        next_btn = page.locator('button:has-text("Next"), button:has-text("Continue"), button[type="submit"]').first
         if next_btn.is_visible(timeout=2000):
             next_btn.click(force=True)
             page.wait_for_timeout(1500)
@@ -143,8 +148,24 @@ class FairplayBetAdapter(BaseSiteAdapter):
             page.wait_for_timeout(4000)
 
         # 8. Verify Result
-        body_text = page.inner_text("body").lower()
-        if "deposit" in body_text or "welcome" in body_text or "account created" in body_text or "registration successful" in body_text:
+        auth_indicators = [
+            'a:has-text("Deposit")', 'button:has-text("Deposit")',
+            'a:has-text("My Account")', 'button:has-text("My Account")',
+            '.user-balance', '.account-balance', '[class*="deposit-modal"]'
+        ]
+        join_btn = page.locator('button:has-text("Register"), a:has-text("Register")').first
+        is_join_visible = join_btn.is_visible(timeout=1500)
+
+        has_auth = False
+        for selector in auth_indicators:
+            try:
+                if page.locator(selector).first.is_visible(timeout=1500):
+                    has_auth = True
+                    break
+            except Exception:
+                continue
+
+        if has_auth or not is_join_visible:
             log.info("Registration confirmed successfully!")
             success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
             return RegistrationResult(
@@ -160,25 +181,6 @@ class FairplayBetAdapter(BaseSiteAdapter):
                 screenshot_path=success_shot
             )
 
-        # Check for inline validation error messages
-        error_el = page.locator('div[class*="error"], span[class*="error"], p[class*="error"], div[role="alert"]').first
-        if error_el.is_visible(timeout=2000):
-            err_msg = error_el.inner_text().strip()
-            log.warning(f"Registration validation message: {err_msg}")
-            bundle = capture_failure_bundle(page, client.client_id, self.site_id, "validation_error", Exception(err_msg))
-            return RegistrationResult(
-                client_id=client.client_id,
-                client_name=client.full_name,
-                site_id=self.site_id,
-                site_name=self.site_name,
-                status=RegistrationStatus.FAILED,
-                email=client.email,
-                password=password,
-                error_summary=bundle.error_summary,
-                screenshot_path=bundle.screenshot_path,
-                dom_snapshot_path=bundle.dom_snapshot_path
-            )
-
         # Default fallback capture
         bundle = capture_failure_bundle(page, client.client_id, self.site_id, "verify_submission")
         return RegistrationResult(
@@ -186,8 +188,76 @@ class FairplayBetAdapter(BaseSiteAdapter):
             client_name=client.full_name,
             site_id=self.site_id,
             site_name=self.site_name,
-            status=RegistrationStatus.SUCCESS,
+            status=RegistrationStatus.FAILED,
             email=client.email,
             password=password,
-            account_reference="FairplayBet-Submitted"
+            error_summary="Registration was not confirmed by Fairplay Bet",
+            screenshot_path=bundle.screenshot_path
         )
+
+
+    def login(
+        self,
+        page: Page,
+        username_or_email: str,
+        password: str,
+        client_id: Optional[str] = None
+    ) -> tuple[bool, Optional[str], Optional[str]]:
+        """Specialized login verification handler for Fairplay Bet."""
+        cid = client_id or "client"
+        log = get_logger(client_id=cid, site_id=self.site_id, step="login")
+        log.info(f"Executing Fairplay Bet login verification for {username_or_email}")
+
+        try:
+            if not self.navigate(page):
+                return False, None, "Failed to navigate to Fairplay Bet"
+
+            self.accept_cookies(page)
+
+            # Check if login modal button exists
+            log_btn = page.locator('button:has-text("Log In"), a:has-text("Log In"), button:has-text("Sign In")').first
+            if log_btn.is_visible(timeout=4000):
+                log_btn.click(force=True)
+                page.wait_for_timeout(1500)
+
+            # Target Fairplay login inputs
+            em_inp = page.locator('input[name="email"], input[name="username"], input[type="email"], input[placeholder*="email" i]').first
+            pw_inp = page.locator('input[name="password"], input[type="password"]').first
+
+            if not em_inp.is_visible(timeout=4000) or not pw_inp.is_visible(timeout=4000):
+                bundle = capture_failure_bundle(page, cid, self.site_id, "fairplay_login_missing")
+                return False, bundle.screenshot_path, "Fairplay Bet login inputs not found"
+
+            em_inp.fill(username_or_email)
+            pw_inp.fill(password)
+            page.wait_for_timeout(500)
+
+            # Click Log In submit
+            submit_btn = page.locator('button:has-text("Log In"), button:has-text("Login"), button[type="submit"]').first
+            if submit_btn.is_visible(timeout=3000):
+                submit_btn.click(force=True)
+            else:
+                pw_inp.press("Enter")
+
+            page.wait_for_timeout(5000)
+
+            # Dismiss any welcome / deposit dialogs
+            close_btn = page.locator('button[aria-label="Close"], button:has-text("Close"), button:has-text("Maybe Later"), .modal-close').first
+            if close_btn.is_visible(timeout=2000):
+                try:
+                    close_btn.click(force=True)
+                    page.wait_for_timeout(1000)
+                except Exception:
+                    pass
+
+            # Capture proof
+            from core.logger import capture_login_proof_screenshot
+            proof_path = capture_login_proof_screenshot(page, cid, self.site_id)
+            log.info(f"Fairplay Bet login proof captured: {proof_path}")
+            return True, proof_path, None
+
+        except Exception as e:
+            log.error(f"Fairplay Bet login error: {e}")
+            bundle = capture_failure_bundle(page, cid, self.site_id, "fairplay_login_error", e)
+            return False, bundle.screenshot_path, str(e)
+

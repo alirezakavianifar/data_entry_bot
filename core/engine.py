@@ -1,5 +1,6 @@
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
+from config.settings import AUTO_VERIFY_LOGIN
 from data.base_provider import BaseDataProvider
 from data.models import Client, RegistrationResult, RegistrationStatus
 from core.state import StateManager
@@ -32,10 +33,11 @@ class AutomationEngine:
         limit: int = 20,
         client_id_filter: Optional[str] = None,
         site_filters: Optional[List[str]] = None,
-        dry_run: bool = False
+        dry_run: bool = False,
+        verify_login: bool = AUTO_VERIFY_LOGIN
     ) -> dict:
         """Executes the signup pipeline for eligible clients across target websites."""
-        logger.info(f"Starting automation run (Limit: {limit}, Dry-Run: {dry_run})")
+        logger.info(f"Starting automation run (Limit: {limit}, Dry-Run: {dry_run}, Verify-Login: {verify_login})")
         
         # 1. Fetch eligible clients
         clients = self.provider.get_valid_clients()
@@ -100,7 +102,43 @@ class AutomationEngine:
 
                     try:
                         result = site.execute(page=page, client=client, password=password)
-                        
+
+                        # Close signup context prior to login verification
+                        self.browser_mgr.stop_trace(context, export_name=f"{client.client_id}_{site.site_id}")
+                        try:
+                            context.close()
+                        except Exception:
+                            pass
+
+                        # Post-Registration Login Verification (if desired & signup succeeded)
+                        if result.status == RegistrationStatus.SUCCESS and verify_login:
+                            logger.info(f"🔐 Verifying account creation via login for {client.full_name} on {site.site_name}...")
+                            login_ctx = self.browser_mgr.new_context(trace_name=f"{client.client_id}_{site.site_id}_login")
+                            login_page = login_ctx.new_page()
+                            try:
+                                login_ok, login_proof, login_err = site.login(
+                                    page=login_page,
+                                    username_or_email=client.email,
+                                    password=password,
+                                    client_id=client.client_id
+                                )
+                                if login_ok and login_proof:
+                                    result.login_verified = True
+                                    result.login_screenshot_path = login_proof
+                                    result.screenshot_path = login_proof
+                                    logger.info(f"✅ Login verified with visual proof: {login_proof}")
+                                else:
+                                    result.login_verified = False
+                                    result.login_error = login_err
+                                    logger.warning(f"⚠️ Login verification unconfirmed: {login_err}")
+                            except Exception as le:
+                                logger.error(f"Error during login verification step: {le}")
+                            finally:
+                                try:
+                                    login_ctx.close()
+                                except Exception:
+                                    pass
+
                         # Record in persistent state
                         self.state_mgr.record_result(result)
 
@@ -115,12 +153,6 @@ class AutomationEngine:
                     except Exception as e:
                         logger.error(f"Execution error on {site.site_name} for {client.full_name}: {e}")
                         stats["failed_count"] += 1
-                    finally:
-                        self.browser_mgr.stop_trace(context, export_name=f"{client.client_id}_{site.site_id}")
-                        try:
-                            context.close()
-                        except Exception:
-                            pass
 
                 stats["processed_clients"] += 1
 
@@ -133,3 +165,59 @@ class AutomationEngine:
         logger.info(f"Run Stats: {stats}")
         logger.info(f"=======================================================")
         return {"stats": stats, "state_summary": summary}
+
+
+def verify_single_account(
+    client_id: str,
+    site_id: str,
+    email: str,
+    password: str,
+    headed: bool = False
+) -> Tuple[bool, Optional[str], Optional[str]]:
+    """
+    On-demand single account login verification utility.
+    Launches browser, attempts login, captures proof screenshot, and updates StateManager.
+    Returns (success, proof_path, error_message).
+    """
+    state_mgr = StateManager()
+    browser_mgr = BrowserManager(headless=not headed)
+    adapters = get_site_adapters(filter_sites=[site_id])
+    if not adapters:
+        return False, None, f"No adapter found for site '{site_id}'"
+
+    adapter = adapters[0]
+    logger.info(f"Starting on-demand login verification: Client '{client_id}', Site '{site_id}', Headed={headed}")
+
+    try:
+        browser_mgr.start()
+        context = browser_mgr.new_context()
+        page = context.new_page()
+
+        success, proof_path, error_msg = adapter.login(
+            page=page,
+            username_or_email=email,
+            password=password,
+            client_id=client_id
+        )
+
+        state_mgr.update_login_verification(
+            client_id=client_id,
+            site_id=site_id,
+            success=success,
+            screenshot_path=proof_path,
+            error_summary=error_msg
+        )
+
+        try:
+            context.close()
+        except Exception:
+            pass
+
+        return success, proof_path, error_msg
+
+    except Exception as e:
+        logger.error(f"Error in verify_single_account for {client_id} on {site_id}: {e}")
+        return False, None, str(e)
+    finally:
+        browser_mgr.close()
+

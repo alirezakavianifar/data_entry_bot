@@ -116,4 +116,8 @@ class RegistrationResult(BaseModel):
     error_summary: Optional[str] = None
     screenshot_path: Optional[str] = None
     dom_snapshot_path: Optional[str] = None
+    login_verified: bool = False
+    login_screenshot_path: Optional[str] = None
+    login_error: Optional[str] = None
     timestamp: datetime.datetime = Field(default_factory=datetime.datetime.now)
+

@@ -15,6 +15,7 @@ from config.settings import (
     EXCEL_INPUT_PATH,
     GOOGLE_SHEET_URL,
     DAILY_CLIENT_LIMIT,
+    AUTO_VERIFY_LOGIN,
     BROWSER_HEADLESS,
     LOGS_DIR,
     ARTIFACTS_DIR
@@ -23,12 +24,13 @@ from data.factory import get_data_provider
 from data.models import RegistrationStatus
 from core.browser import BrowserManager
 from core.state import StateManager
-from core.engine import AutomationEngine
+from core.engine import AutomationEngine, verify_single_account
 from sites import get_site_adapters, load_promo_config
 
 # Set appearance mode and theme
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
+
 
 
 class GuiLogSink:
@@ -167,7 +169,17 @@ class DataEntryBotGUI(ctk.CTk):
         self.filter_label = ctk.CTkLabel(self.sidebar, text="Filter Client Name (Optional):")
         self.filter_label.grid(row=10, column=0, padx=20, pady=(5, 2), sticky="w")
         self.filter_entry = ctk.CTkEntry(self.sidebar, placeholder_text="e.g. Courtney Weaver")
-        self.filter_entry.grid(row=11, column=0, padx=20, pady=(0, 15), sticky="ew")
+        self.filter_entry.grid(row=11, column=0, padx=20, pady=(0, 10), sticky="ew")
+
+        # Post-Registration Login Verification Switch
+        self.auto_verify_var = ctk.BooleanVar(value=AUTO_VERIFY_LOGIN)
+        self.auto_verify_switch = ctk.CTkSwitch(
+            self.sidebar,
+            text="🔐 Auto-Verify via Login",
+            variable=self.auto_verify_var,
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        self.auto_verify_switch.grid(row=12, column=0, padx=20, pady=(0, 10), sticky="w")
 
         # Open Artifacts Button
         self.open_logs_btn = ctk.CTkButton(
@@ -178,6 +190,7 @@ class DataEntryBotGUI(ctk.CTk):
             command=self._open_artifacts_folder
         )
         self.open_logs_btn.grid(row=13, column=0, padx=20, pady=15, sticky="ew")
+
 
         # ==========================================
         # 2. MAIN CONTENT AREA (Right Panel)
@@ -487,13 +500,25 @@ class DataEntryBotGUI(ctk.CTk):
                 row_frame = ctk.CTkFrame(self.acc_scroll_frame, fg_color="#262626" if idx % 2 == 0 else "#2d2d2d", corner_radius=6)
                 row_frame.pack(fill="x", padx=5, pady=3)
 
+                client_id = r.get("client_id", "")
+                site_id = r.get("site_id", "")
+                email = r.get("email", "")
+                password = r.get("password") or ""
+                shot_path = r.get("login_screenshot_path") or r.get("screenshot_path")
+                is_verified = bool(r.get("login_verified"))
+
                 # 1. Pack Action Buttons on the RIGHT FIRST (Guarantees they never get pushed off screen)
                 def make_copy_cmd(pwd):
                     return lambda: self._copy_to_clipboard(pwd)
 
                 def make_view_shot_cmd(shot):
                     if shot and Path(shot).exists():
-                        return lambda: subprocess.Popen(f'explorer "{shot}"')
+                        try:
+                            if sys.platform == "win32":
+                                return lambda: os.startfile(str(shot))
+                            return lambda: subprocess.Popen(f'explorer "{shot}"')
+                        except Exception:
+                            return lambda: subprocess.Popen(f'explorer "{shot}"')
                     return lambda: subprocess.Popen(f'explorer "{ARTIFACTS_DIR}"')
 
                 copy_btn = ctk.CTkButton(
@@ -503,29 +528,50 @@ class DataEntryBotGUI(ctk.CTk):
                     height=26,
                     fg_color="#37474f",
                     hover_color="#455a64",
-                    command=make_copy_cmd(r.get("password") or "")
+                    command=make_copy_cmd(password)
                 )
-                copy_btn.pack(side="right", padx=(4, 10), pady=6)
+                copy_btn.pack(side="right", padx=(4, 8), pady=6)
 
-                shot_path = r.get("screenshot_path")
                 shot_btn = ctk.CTkButton(
                     row_frame,
                     text="🖼️ Proof",
                     width=65,
                     height=26,
-                    fg_color="#2e7d32",
+                    fg_color="#2e7d32" if is_verified else "#388e3c",
                     hover_color="#1b5e20",
                     command=make_view_shot_cmd(shot_path)
                 )
                 shot_btn.pack(side="right", padx=(4, 4), pady=6)
 
-                # 2. Pack Info Labels on the LEFT
+                verify_btn = ctk.CTkButton(
+                    row_frame,
+                    text="🔑 Verify",
+                    width=75,
+                    height=26,
+                    fg_color="#0277bd",
+                    hover_color="#01579b"
+                )
+                verify_btn.configure(
+                    command=lambda cid=client_id, sid=site_id, em=email, pw=password, btn=verify_btn: self._verify_single_account_action(cid, sid, em, pw, btn)
+                )
+                verify_btn.pack(side="right", padx=(4, 4), pady=6)
+
+                # 2. Pack Status Badge and Info Labels on the LEFT
+                status_lbl = ctk.CTkLabel(
+                    row_frame,
+                    text="🔐 Verified" if is_verified else "⏳ Unverified",
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    text_color="#81c784" if is_verified else "#ffa726",
+                    width=80
+                )
+                status_lbl.pack(side="right", padx=(4, 8), pady=6)
+
                 name_lbl = ctk.CTkLabel(
                     row_frame,
                     text=f"👤 {r.get('client_name', 'Unknown')}",
                     font=ctk.CTkFont(weight="bold", size=13),
                     anchor="w",
-                    width=135
+                    width=130
                 )
                 name_lbl.pack(side="left", padx=8, pady=6)
 
@@ -535,28 +581,27 @@ class DataEntryBotGUI(ctk.CTk):
                     font=ctk.CTkFont(size=12),
                     text_color="#64b5f6",
                     anchor="w",
-                    width=100
+                    width=95
                 )
                 site_badge.pack(side="left", padx=4, pady=6)
 
                 email_lbl = ctk.CTkLabel(
                     row_frame,
-                    text=f"✉️ {r.get('email', '')}",
+                    text=f"✉️ {email}",
                     font=ctk.CTkFont(size=12),
                     text_color="#cfd8dc",
                     anchor="w",
-                    width=180
+                    width=175
                 )
                 email_lbl.pack(side="left", padx=4, pady=6)
 
-                pwd_val = r.get("password") or ""
                 pwd_lbl = ctk.CTkLabel(
                     row_frame,
-                    text=f"🔑 {pwd_val}",
+                    text=f"🔑 {password}",
                     font=ctk.CTkFont(family="Consolas", size=12),
                     text_color="#aed581",
                     anchor="w",
-                    width=120
+                    width=115
                 )
                 pwd_lbl.pack(side="left", padx=4, pady=6)
 
@@ -606,6 +651,34 @@ class DataEntryBotGUI(ctk.CTk):
         except Exception as e:
             logger.error(f"Failed to populate failures: {e}")
 
+    def _verify_single_account_action(self, client_id: str, site_id: str, email: str, password: str, btn: ctk.CTkButton):
+        """Launches on-demand login verification for a single registered account."""
+        btn.configure(state="disabled", text="⏳ Testing...")
+        headed = "Visible" in self.browser_mode_selector.get()
+
+        def worker():
+            try:
+                logger.info(f"Starting manual login verification for {client_id} ({email}) on {site_id}")
+                success, proof_path, err = verify_single_account(
+                    client_id=client_id,
+                    site_id=site_id,
+                    email=email,
+                    password=password,
+                    headed=headed
+                )
+                if success:
+                    logger.info(f"🎉 Login verified successfully for {email}! Proof: {proof_path}")
+                    self.after(0, lambda: messagebox.showinfo("Login Verified", f"Account successfully logged in!\nProof saved: {proof_path}"))
+                else:
+                    logger.warning(f"❌ Login verification failed for {email}: {err}")
+                    self.after(0, lambda: messagebox.showwarning("Login Verification Failed", f"Login test failed:\n{err}"))
+            except Exception as e:
+                logger.error(f"Exception during manual verification: {e}")
+            finally:
+                self.after(0, lambda: self._populate_registered_accounts())
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _copy_to_clipboard(self, text: str):
         self.clipboard_clear()
         self.clipboard_append(text)
@@ -643,6 +716,7 @@ class DataEntryBotGUI(ctk.CTk):
         headed = "Visible" in self.browser_mode_selector.get()
         limit = int(self.limit_slider.get())
         client_filter = self.filter_entry.get().strip() or None
+        verify_login = self.auto_verify_var.get()
 
         self.is_running = True
         self.btn_start.configure(state="disabled")
@@ -673,14 +747,19 @@ class DataEntryBotGUI(ctk.CTk):
                     limit=limit,
                     client_id_filter=client_filter,
                     site_filters=selected_sites,
-                    dry_run=dry_run
+                    dry_run=dry_run,
+                    verify_login=verify_login
                 )
 
             except Exception as e:
                 logger.error(f"Error in automation engine: {e}")
             finally:
                 self.is_running = False
-                self.after(0, self._on_task_finished)
+                try:
+                    self.after(0, self._on_task_finished)
+                except Exception:
+                    pass
+
 
         self.worker_thread = threading.Thread(target=worker, daemon=True)
         self.worker_thread.start()
@@ -712,3 +791,4 @@ def run_gui():
 
 if __name__ == "__main__":
     run_gui()
+

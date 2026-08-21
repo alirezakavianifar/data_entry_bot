@@ -37,15 +37,22 @@ class StateManager:
                     account_reference TEXT,
                     error_summary TEXT,
                     screenshot_path TEXT,
+                    login_verified INTEGER DEFAULT 0,
+                    login_screenshot_path TEXT,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (client_id, site_id)
                 )
             """)
-            # Auto-migrate table if email column is missing
-            try:
-                conn.execute("ALTER TABLE client_site_status ADD COLUMN email TEXT")
-            except Exception:
-                pass
+            # Auto-migrate table if columns are missing
+            for col, col_type in [
+                ("email", "TEXT"),
+                ("login_verified", "INTEGER DEFAULT 0"),
+                ("login_screenshot_path", "TEXT")
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE client_site_status ADD COLUMN {col} {col_type}")
+                except Exception:
+                    pass
             conn.commit()
         finally:
             conn.close()
@@ -67,6 +74,18 @@ class StateManager:
         finally:
             conn.close()
 
+    def get_record(self, client_id: str, site_id: str) -> Optional[Dict]:
+        conn = self._get_connection()
+        try:
+            cur = conn.execute(
+                "SELECT * FROM client_site_status WHERE client_id = ? AND site_id = ?",
+                (client_id, site_id)
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
     def is_complete(self, client_id: str, site_id: str) -> bool:
         """Returns True if the site signup is already completed or skipped."""
         status = self.get_status(client_id, site_id)
@@ -84,7 +103,9 @@ class StateManager:
         password: Optional[str] = None,
         account_reference: Optional[str] = None,
         error_summary: Optional[str] = None,
-        screenshot_path: Optional[str] = None
+        screenshot_path: Optional[str] = None,
+        login_verified: Optional[bool] = None,
+        login_screenshot_path: Optional[str] = None
     ):
         now = datetime.datetime.now().isoformat()
         conn = self._get_connection()
@@ -93,8 +114,8 @@ class StateManager:
                 INSERT INTO client_site_status (
                     client_id, site_id, client_name, site_name, status,
                     email, username, password, account_reference, error_summary,
-                    screenshot_path, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    screenshot_path, login_verified, login_screenshot_path, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(client_id, site_id) DO UPDATE SET
                     status = excluded.status,
                     client_name = COALESCE(NULLIF(excluded.client_name, ''), client_site_status.client_name),
@@ -105,11 +126,14 @@ class StateManager:
                     account_reference = COALESCE(excluded.account_reference, client_site_status.account_reference),
                     error_summary = COALESCE(excluded.error_summary, client_site_status.error_summary),
                     screenshot_path = COALESCE(excluded.screenshot_path, client_site_status.screenshot_path),
+                    login_verified = COALESCE(excluded.login_verified, client_site_status.login_verified),
+                    login_screenshot_path = COALESCE(excluded.login_screenshot_path, client_site_status.login_screenshot_path),
                     updated_at = excluded.updated_at
             """, (
                 client_id, site_id, client_name, site_name, status.value,
                 email, username, password, account_reference, error_summary,
-                screenshot_path, now
+                screenshot_path, 1 if login_verified is True else (0 if login_verified is False else None),
+                login_screenshot_path, now
             ))
             conn.commit()
         finally:
@@ -127,8 +151,44 @@ class StateManager:
             password=result.password,
             account_reference=result.account_reference,
             error_summary=result.error_summary,
-            screenshot_path=result.screenshot_path
+            screenshot_path=result.screenshot_path,
+            login_verified=result.login_verified,
+            login_screenshot_path=result.login_screenshot_path
         )
+
+    def update_login_verification(
+        self,
+        client_id: str,
+        site_id: str,
+        success: bool,
+        screenshot_path: Optional[str] = None,
+        error_summary: Optional[str] = None
+    ):
+        """Updates login verification state and login proof screenshot."""
+        now = datetime.datetime.now().isoformat()
+        conn = self._get_connection()
+        try:
+            conn.execute("""
+                UPDATE client_site_status
+                SET login_verified = ?,
+                    login_screenshot_path = COALESCE(?, login_screenshot_path),
+                    screenshot_path = COALESCE(?, screenshot_path),
+                    error_summary = COALESCE(?, error_summary),
+                    updated_at = ?
+                WHERE client_id = ? AND site_id = ?
+            """, (
+                1 if success else 0,
+                screenshot_path,
+                screenshot_path if success else None,
+                error_summary,
+                now,
+                client_id,
+                site_id
+            ))
+            conn.commit()
+        finally:
+            conn.close()
+
 
     def get_all_records(self, status: Optional[RegistrationStatus] = None) -> List[Dict]:
         """Returns all records sorted by updated_at descending, optionally filtered by status."""

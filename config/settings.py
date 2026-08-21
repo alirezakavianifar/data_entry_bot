@@ -45,9 +45,11 @@ ENABLE_PLAYWRIGHT_TRACE = os.getenv("ENABLE_PLAYWRIGHT_TRACE", "false").lower() 
 # Promo links config
 PROMO_LINKS_FILE = BASE_DIR / "config" / "promo_links.json"
 
-# Daily limits
+# Processing Defaults
 DAILY_CLIENT_LIMIT = int(os.getenv("DAILY_CLIENT_LIMIT", "20"))
+AUTO_VERIFY_LOGIN = os.getenv("AUTO_VERIFY_LOGIN", "true").lower() in ("true", "1", "yes")
 
 # Ensure runtime directories exist
 LOGS_DIR.mkdir(exist_ok=True, parents=True)
 ARTIFACTS_DIR.mkdir(exist_ok=True, parents=True)
+
