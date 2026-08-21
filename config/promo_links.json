@@ -1,0 +1,66 @@
+{
+  "fairplaybet": {
+    "name": "Fairplay Bet",
+    "url": "https://fairplaybet.co.uk/",
+    "link_type": "direct",
+    "enabled": true,
+    "requires_uk_ip": false
+  },
+  "starsports": {
+    "name": "Star Sports",
+    "url": "https://www.starsports.bet/",
+    "link_type": "direct_promo",
+    "enabled": true,
+    "requires_uk_ip": true
+  },
+  "betfred": {
+    "name": "Betfred",
+    "url": "https://www.betfred.com/promotion/sports-onboarding-bet-10-get-10?utm_source=Betfred&utm_medium=Email&utm_campaign=BeatFredResults&p=5",
+    "link_type": "direct_promo",
+    "enabled": true,
+    "requires_uk_ip": true
+  },
+  "quinnbet": {
+    "name": "QuinnBet",
+    "url": "https://www.quinnbet.com/uk/offers/sports-welcome-offer-ukcb50lo",
+    "link_type": "direct_promo",
+    "enabled": true,
+    "requires_uk_ip": true
+  },
+  "bresbet": {
+    "name": "BresBet",
+    "url": "https://bresbet.com/?promo=welcomeb10g10&keyword=bresbet&btag=affelios",
+    "link_type": "direct_promo",
+    "enabled": true,
+    "requires_uk_ip": true
+  },
+  "planetsportbet": {
+    "name": "Planet Sport Bet",
+    "url": "https://planetsportbet.com/?account=static-resource-carousel-promo-terms&promoId=12746",
+    "link_type": "direct_promo",
+    "enabled": true,
+    "requires_uk_ip": true
+  },
+  "bettinglounge1": {
+    "name": "Betting Lounge #1 (Bet St George)",
+    "url": "https://bettinglounge.co.uk/out/aYBjbREAACoASoCM/?offer=betting",
+    "link_type": "affiliate_redirect",
+    "enabled": true,
+    "requires_uk_ip": true
+  },
+  "betgoodwin": {
+    "name": "Betgoodwin",
+    "url": "https://betgoodwin.co.uk/en/page/new-sportsbook-welcome-offer",
+    "link_type": "direct_promo",
+    "enabled": true,
+    "requires_uk_ip": true
+  },
+  "bettinglounge2": {
+    "name": "Betting Lounge #2",
+    "url": "https://bettinglounge.co.uk/out/ZRKfXhAAACkAStm/?offer=betting",
+    "link_type": "affiliate_redirect",
+    "enabled": false,
+    "requires_uk_ip": true,
+    "notes": "Current link returns 404; update when active link is provided"
+  }
+}
