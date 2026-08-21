@@ -51,11 +51,8 @@ class DataEntryBotGUI(ctk.CTk):
         self.geometry("1280x800")
         self.minsize(980, 680)
 
-        # Maximize to full screen on startup
-        try:
-            self.state("zoomed")
-        except Exception:
-            self.after(50, lambda: self.state("zoomed"))
+        # Schedule maximization to avoid DPI/scaling conflict
+        self.after(150, self._maximize_window)
 
         # State & Threading
         self.log_queue = queue.Queue()
@@ -700,6 +697,12 @@ class DataEntryBotGUI(ctk.CTk):
         self.status_badge.configure(text="● COMPLETED", text_color="#81c784")
         self.progress_bar.set(1.0)
         self._update_stats_display()
+
+    def _maximize_window(self):
+        try:
+            self.state("zoomed")
+        except Exception:
+            pass
 
 
 def run_gui():
