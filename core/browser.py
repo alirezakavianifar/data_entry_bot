@@ -20,7 +20,12 @@ class BrowserManager:
     def start(self):
         if not self._playwright:
             self._playwright = sync_playwright().start()
-            launch_args = ["--start-maximized"] if not self.headless else []
+            launch_args = [
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox"
+            ]
+            if not self.headless:
+                launch_args.append("--start-maximized")
             try:
                 # Try system Chrome first on Windows
                 self._browser = self._playwright.chromium.launch(
@@ -45,7 +50,13 @@ class BrowserManager:
         context_kwargs = {
             "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             "locale": "en-GB",
-            "timezone_id": "Europe/London"
+            "timezone_id": "Europe/London",
+            "extra_http_headers": {
+                "Accept-Language": "en-GB,en;q=0.9",
+                "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"',
+            }
         }
         if not self.headless:
             context_kwargs["no_viewport"] = True
@@ -53,6 +64,11 @@ class BrowserManager:
             context_kwargs["viewport"] = {"width": 1920, "height": 1080}
 
         context = self._browser.new_context(**context_kwargs)
+        context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+        """)
         context.set_default_timeout(BROWSER_TIMEOUT_MS)
 
         if self.enable_trace:
