@@ -74,20 +74,42 @@ class QuinnbetAdapter(BaseSiteAdapter):
             log.info(f"Filling Step 1 credentials for {client.email}")
             step1_inputs[0].fill(client.email)
             step1_inputs[1].fill(password)
-            page.wait_for_timeout(500)
+            step1_inputs[0].evaluate("el => el.dispatchEvent(new Event('blur', {bubbles: true}))")
+            page.wait_for_timeout(1000)
 
-            create_acc_btn = page.locator('button:has-text("CREATE ACCOUNT"), button:has-text("CONTINUE"), form button[type="button"]:has-text("CREATE")').first
-            if create_acc_btn.is_visible(timeout=2000):
-                create_acc_btn.click(force=True)
-                page.wait_for_timeout(3500)
+            # Check for Step 1 validation error (e.g. Email already registered)
+            is_email_invalid = False
+            try:
+                is_email_invalid = step1_inputs[0].evaluate("el => el.classList.contains('ng-invalid')")
+            except Exception:
+                pass
 
-            _dismiss_cookies()
+            step1_err_loc = page.locator('app-reg-step-one .mat-error, app-reg-step-one .field--error-msg, app-reg-step-one .error, app-reg-step-one div.alert-danger, .mat-error, mat-error')
+            err_text = ""
+            if step1_err_loc.count() > 0:
+                for idx in range(step1_err_loc.count()):
+                    txt = step1_err_loc.nth(idx).inner_text().strip()
+                    if txt:
+                        err_text = txt
+                        break
 
-            # Check for Step 1 validation error
-            step1_err = page.locator('div.alert-danger, span.error-message, mat-error, p.error').first
-            if step1_err.is_visible(timeout=1000):
-                err_text = step1_err.inner_text().strip()
-                if any(kw in err_text.lower() for kw in ["already exists", "in use", "invalid", "taken"]):
+            if is_email_invalid or err_text:
+                if any(kw in err_text.lower() for kw in ["already exists", "already registered", "in use", "invalid", "taken"]) or "already" in err_text.lower():
+                    log.warning(f"[DUPLICATE] QuinnBet Step 1 duplicate error: {err_text or 'Email already registered'}")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered", Exception(err_text or "Email already registered"))
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.ALREADY_REGISTERED,
+                        email=client.email,
+                        password=password,
+                        error_summary=f"Already registered: {err_text or 'Email already registered'}",
+                        screenshot_path=bundle.screenshot_path,
+                        dom_snapshot_path=bundle.dom_snapshot_path
+                    )
+                elif err_text:
                     log.warning(f"QuinnBet Step 1 validation error: {err_text}")
                     bundle = capture_failure_bundle(page, client.client_id, self.site_id, "step1_error", Exception(err_text))
                     return RegistrationResult(
@@ -101,6 +123,13 @@ class QuinnbetAdapter(BaseSiteAdapter):
                         error_summary=f"Step 1 error: {err_text}",
                         screenshot_path=bundle.screenshot_path
                     )
+
+            create_acc_btn = page.locator('button:has-text("CREATE ACCOUNT"), button:has-text("CONTINUE"), form button[type="button"]:has-text("CREATE")').first
+            if create_acc_btn.is_visible(timeout=2000):
+                create_acc_btn.click(force=True)
+                page.wait_for_timeout(3500)
+
+            _dismiss_cookies()
 
             # 4. Step 2: Personal Details
             page.locator("app-reg-step-two input").first.wait_for(timeout=8000)
@@ -181,7 +210,7 @@ class QuinnbetAdapter(BaseSiteAdapter):
             if step2_err.is_visible(timeout=1000):
                 err_text = step2_err.inner_text().strip()
                 if "already exists" in err_text.lower():
-                    log.warning(f"⚠️ QuinnBet Step 2 duplicate error: {err_text}")
+                    log.warning(f"[DUPLICATE] QuinnBet Step 2 duplicate error: {err_text}")
                     bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered", Exception(err_text))
                     return RegistrationResult(
                         client_id=client.client_id,
@@ -236,7 +265,7 @@ class QuinnbetAdapter(BaseSiteAdapter):
                 is_duplicate = is_already_registered_error(raw_err_text)
 
                 if is_duplicate:
-                    log.warning(f"⚠️ QuinnBet: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
+                    log.warning(f"[DUPLICATE] QuinnBet: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
                     bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
                     return RegistrationResult(
                         client_id=client.client_id,
