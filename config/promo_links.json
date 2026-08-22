@@ -8,7 +8,7 @@
   },
   "starsports": {
     "name": "Star Sports",
-    "url": "https://www.starsports.bet/",
+    "url": "https://starsports.bet/",
     "link_type": "direct_promo",
     "enabled": true,
     "requires_uk_ip": true

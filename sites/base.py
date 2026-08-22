@@ -15,7 +15,8 @@ ALREADY_REGISTERED_PATTERNS = [
     r"email (?:address )?is already (?:registered|in use)",
     r"user(?:name)? already exists",
     r"duplicate account",
-    r"already have an account"
+    r"already have an account",
+    r"already opened an account on our operating license"
 ]
 
 def extract_clean_error_message(text: str) -> str:
@@ -29,6 +30,8 @@ def extract_clean_error_message(text: str) -> str:
         r"(email (?:address )?is already (?:registered|in use)[^\.\n]*)",
         r"(user(?:name)? already exists[^\.\n]*)",
         r"(already registered[^\.\n]*)",
+        r"(already opened an account on our operating license[^\.\n]*)",
+        r"(Thank you for attempting to open an account with us[^\.\n]*\.[^\.\n]*\.)",
         r"(invalid credentials[^\.\n]*)",
         r"(unable to (?:register|process)[^\.\n]*)",
         r"(please (?:check|correct) the following errors?:?[^\.\n]*)",
@@ -80,7 +83,10 @@ PENDING_VERIFICATION_PATTERNS = [
     r"verify your details",
     r"account pending verification",
     r"require email verification",
-    r"email verification"
+    r"email verification",
+    r"account (?:is )?suspended",
+    r"suspended",
+    r"account (?:is )?locked"
 ]
 
 def is_pending_verification_error(text: str) -> bool:

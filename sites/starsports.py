@@ -7,7 +7,7 @@ from core.logger import get_logger, capture_failure_bundle, capture_success_scre
 class StarSportsAdapter(BaseSiteAdapter):
     """Adapter for Star Sports (https://www.starsports.bet/)."""
 
-    def __init__(self, promo_url: str = "https://www.starsports.bet/"):
+    def __init__(self, promo_url: str = "https://starsports.bet/"):
         super().__init__(
             site_id="starsports",
             site_name="Star Sports",
@@ -22,9 +22,12 @@ class StarSportsAdapter(BaseSiteAdapter):
 
         try:
             # 1. Direct navigation to clean signup URL or trigger modal
-            if not page.url.endswith("?account=signup"):
-                page.goto("https://www.starsports.bet/?account=signup", wait_until="domcontentloaded", timeout=25000)
-                page.wait_for_timeout(2000)
+            if "?account=signup" not in page.url:
+                try:
+                    page.goto("https://starsports.bet/?account=signup", wait_until="domcontentloaded", timeout=25000)
+                    page.wait_for_timeout(2000)
+                except Exception as ex:
+                    log.warning(f"Direct signup navigation warning: {ex}")
 
             # Cookiebot Consent Handling
             cookie_btn = page.locator('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll, #CybotCookiebotDialogBodyButtonAccept, button:has-text("Allow all"), button:has-text("Accept")').first
@@ -112,15 +115,24 @@ class StarSportsAdapter(BaseSiteAdapter):
                     screenshot_path=bundle.screenshot_path
                 )
 
+            # Select Title (Mr / Ms)
+            title_el = page.locator('[data-test="mr-title-choose-box"], [data-test="title-choose-box"] div:first-child, label:has-text("Mr")').first
+            if title_el.is_visible(timeout=2000):
+                title_el.click(force=True)
+                page.wait_for_timeout(300)
+
             log.info("Filling Step 2 Personal Details (Name, DOB, Phone, Postcode)")
             fn_inp.fill(client.first_name)
             ln_inp.fill(client.last_name)
-            day_inp.fill(f"{client.dob_day:02d}")
-            month_inp.fill(f"{client.dob_month:02d}")
+            day_inp.fill(str(int(client.dob_day)).zfill(2))
+            month_inp.fill(str(int(client.dob_month)).zfill(2))
             year_inp.fill(str(client.dob_year))
 
             # Phone number (strip leading 0 as UK prefix +44 is pre-selected)
-            cleaned_phone = client.phone.lstrip("0")
+            cleaned_phone = client.phone
+            if cleaned_phone.startswith("+44"):
+                cleaned_phone = cleaned_phone[3:]
+            cleaned_phone = cleaned_phone.lstrip("0")
             num_inp.fill(cleaned_phone)
 
             # Postcode & Address Lookup
@@ -144,19 +156,22 @@ class StarSportsAdapter(BaseSiteAdapter):
             agree_btn = page.locator('button[data-test="agree-and-join-button"]').first
             if agree_btn.is_visible(timeout=3000):
                 log.info("Submitting registration via 'Agree & Join'")
+                agree_btn.scroll_into_view_if_needed()
+                page.wait_for_timeout(500)
                 agree_btn.click(force=True)
                 page.wait_for_timeout(6000)
 
             # 5. Confirm Registration Success
-            # Check for error banners first
-            error_modal = page.locator('div[class*="error"]:visible, div[role="alert"]:visible, .error-message:visible').first
-            if error_modal.is_visible(timeout=1500):
-                raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
+            # Check for error message under Agree & Join or in SignUpStepsContainer
+            error_el = page.locator('[data-test="error-message-content"]:visible, aside[data-test="SignUpStepsContainer"] [class*="MessageWrapper"]:visible, [data-test*="error"]:visible').first
+            if error_el.is_visible(timeout=3000):
+                raw_err_text = error_el.inner_text().strip().replace("\n", " - ")
                 clean_err = extract_clean_error_message(raw_err_text)
-                is_duplicate = is_already_registered_error(raw_err_text)
+                is_duplicate = is_already_registered_error(raw_err_text) or "operating license" in raw_err_text.lower() or "regret to inform" in raw_err_text.lower()
+                final_err_msg = clean_err or raw_err_text
 
                 if is_duplicate:
-                    log.warning(f"⚠️ Star Sports: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
+                    log.warning(f"[DUPLICATE] Star Sports: Client {client.full_name} is ALREADY REGISTERED ({final_err_msg})")
                     bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
                     return RegistrationResult(
                         client_id=client.client_id,
@@ -166,13 +181,13 @@ class StarSportsAdapter(BaseSiteAdapter):
                         status=RegistrationStatus.ALREADY_REGISTERED,
                         email=client.email,
                         password=password,
-                        error_summary=f"Already registered: {clean_err}",
+                        error_summary=f"Already registered: {final_err_msg}",
                         screenshot_path=bundle.screenshot_path,
                         dom_snapshot_path=bundle.dom_snapshot_path
                     )
                 else:
-                    log.warning(f"Star Sports registration rejected: {clean_err}")
-                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(clean_err))
+                    log.warning(f"Star Sports registration rejected: {final_err_msg}")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(final_err_msg))
                     return RegistrationResult(
                         client_id=client.client_id,
                         client_name=client.full_name,
@@ -181,17 +196,29 @@ class StarSportsAdapter(BaseSiteAdapter):
                         status=RegistrationStatus.FAILED,
                         email=client.email,
                         password=password,
-                        error_summary=clean_err,
+                        error_summary=final_err_msg,
                         screenshot_path=bundle.screenshot_path,
                         dom_snapshot_path=bundle.dom_snapshot_path
                     )
 
+            # Handle Safer Gambling modal if present
+            safer_modal = page.locator('aside[data-test="SignUpStepsContainer"] legend:has-text("SAFER GAMBLING"), aside[data-test="SignUpStepsContainer"] h2:has-text("SAFER GAMBLING"), aside[data-test="SignUpStepsContainer"] [data-test*="safer-gambling"]').first
+            if safer_modal.is_visible(timeout=3000):
+                log.info("Safer Gambling modal detected, progressing...")
+                ack_toggle = page.locator('aside[data-test="SignUpStepsContainer"] label:has-text("deposit limit"), aside[data-test="SignUpStepsContainer"] [class*="Switch"]').last
+                if ack_toggle.is_visible(timeout=1500):
+                    ack_toggle.click(force=True)
+                    page.wait_for_timeout(300)
+                next_btn = page.locator('aside[data-test="SignUpStepsContainer"] button:has-text("Next"), aside[data-test="SignUpStepsContainer"] button:has-text("NEXT")').first
+                if next_btn.is_visible(timeout=2000):
+                    next_btn.click(force=True)
+                    page.wait_for_timeout(4000)
 
             auth_indicators = [
                 'a:has-text("Deposit")', 'button:has-text("Deposit")',
                 'a:has-text("My Account")', 'button:has-text("My Account")',
                 '[data-component="AccountNavigation"] [data-test*="account"]',
-                '.user-balance', '[class*="balance"]', '[class*="deposit-modal"]'
+                '.user-balance', '[class*="deposit-modal"]', 'h1:has-text("SAFER GAMBLING")'
             ]
             has_auth = False
             for selector in auth_indicators:
@@ -202,10 +229,10 @@ class StarSportsAdapter(BaseSiteAdapter):
                 except Exception:
                     continue
 
-            # Check if registration form is still open
-            is_reg_open = page.locator('input[name="email"]:visible, input[name="password"]:visible, input#email:visible').first.is_visible(timeout=1000)
+            # Check if signup form is still open
+            agree_still_open = page.locator('button[data-test="agree-and-join-button"]:visible').first.is_visible(timeout=1000)
 
-            if has_auth and not is_reg_open:
+            if (has_auth or not agree_still_open):
                 log.info("Star Sports registration confirmed successfully!")
                 success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
                 return RegistrationResult(
@@ -261,10 +288,10 @@ class StarSportsAdapter(BaseSiteAdapter):
         """Specialized login verification handler for Star Sports."""
         cid = client_id or "client"
         log = get_logger(client_id=cid, site_id=self.site_id, step="login")
-        log.info(f"Navigating to Star Sports clean login URL: https://www.starsports.bet/?account=login")
+        log.info(f"Navigating to Star Sports clean login URL: https://starsports.bet/?account=login")
 
         try:
-            page.goto("https://www.starsports.bet/?account=login", wait_until="domcontentloaded", timeout=25000)
+            page.goto("https://starsports.bet/?account=login", wait_until="domcontentloaded", timeout=25000)
             page.wait_for_timeout(2000)
             self.accept_cookies(page)
 
