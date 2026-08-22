@@ -24,8 +24,9 @@ from data.factory import get_data_provider
 from data.models import RegistrationStatus
 from core.browser import BrowserManager
 from core.state import StateManager
-from core.engine import AutomationEngine, verify_single_account
+from core.engine import AutomationEngine, verify_single_account, register_single_account
 from sites import get_site_adapters, load_promo_config
+from sites.base import is_pending_verification_error
 
 # Set appearance mode and theme
 ctk.set_appearance_mode("Dark")
@@ -88,7 +89,7 @@ class DataEntryBotGUI(ctk.CTk):
         # ==========================================
         self.sidebar = ctk.CTkFrame(self, width=320, corner_radius=0)
         self.sidebar.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
-        self.sidebar.grid_rowconfigure(12, weight=1)
+        self.sidebar.grid_rowconfigure(14, weight=1)
 
         # App Title
         self.logo_label = ctk.CTkLabel(
@@ -181,6 +182,16 @@ class DataEntryBotGUI(ctk.CTk):
         )
         self.auto_verify_switch.grid(row=12, column=0, padx=20, pady=(0, 10), sticky="w")
 
+        # Retry Previously Failed Switch
+        self.retry_failed_var = ctk.BooleanVar(value=False)
+        self.retry_failed_switch = ctk.CTkSwitch(
+            self.sidebar,
+            text="🔁 Retry Failed Records",
+            variable=self.retry_failed_var,
+            font=ctk.CTkFont(size=12)
+        )
+        self.retry_failed_switch.grid(row=13, column=0, padx=20, pady=(0, 10), sticky="w")
+
         # Open Artifacts Button
         self.open_logs_btn = ctk.CTkButton(
             self.sidebar,
@@ -189,7 +200,7 @@ class DataEntryBotGUI(ctk.CTk):
             hover_color="#3b3b3b",
             command=self._open_artifacts_folder
         )
-        self.open_logs_btn.grid(row=13, column=0, padx=20, pady=15, sticky="ew")
+        self.open_logs_btn.grid(row=14, column=0, padx=20, pady=15, sticky="ew")
 
 
         # ==========================================
@@ -381,6 +392,10 @@ class DataEntryBotGUI(ctk.CTk):
         self.fail_header.grid(row=0, column=0, sticky="ew", padx=10, pady=(5, 5))
         self.fail_title = ctk.CTkLabel(self.fail_header, text="Registration Exceptions & Diagnostic Bundles", font=ctk.CTkFont(weight="bold"))
         self.fail_title.pack(side="left")
+        self.fail_count_label = ctk.CTkLabel(self.fail_header, text="Total: 0 failures", font=ctk.CTkFont(weight="bold"))
+        self.fail_count_label.pack(side="right", padx=(10, 0))
+        self.btn_clear_fails = ctk.CTkButton(self.fail_header, text="🧹 Clear All Failures", width=120, height=24, fg_color="#444", hover_color="#555", command=self._clear_all_failures_action)
+        self.btn_clear_fails.pack(side="right", padx=(5, 0))
         self.btn_refresh_fails = ctk.CTkButton(self.fail_header, text="🔄 Refresh", width=80, height=24, command=self._populate_failures)
         self.btn_refresh_fails.pack(side="right")
 
@@ -460,7 +475,12 @@ class DataEntryBotGUI(ctk.CTk):
             succ = summary.get("SUCCESS", 0)
             fail = summary.get("FAILED", 0)
             rev = summary.get("MANUAL_REVIEW", 0)
-            self.stats_label.configure(text=f"Success: {succ} | Failed: {fail} | Manual: {rev}")
+            already = summary.get("ALREADY_REGISTERED", 0)
+            total_processed = succ + fail + rev + already
+
+            self.stats_label.configure(
+                text=f"Total Processed: {total_processed} | ✅ Success: {succ} | ⚠️ Failed: {fail} | ⏳ KYC: {rev} | ℹ️ Existing: {already}"
+            )
             self._populate_registered_accounts()
             self._populate_failures()
         except Exception:
@@ -564,12 +584,22 @@ class DataEntryBotGUI(ctk.CTk):
                 verify_btn.pack(side="right", padx=(4, 4), pady=6)
 
                 # 2. Pack Status Badge and Info Labels on the LEFT
+                err_summary = (r.get("error_summary") or "").lower()
+                is_email_pending = any(k in err_summary for k in ["email", "activation", "inbox", "verify your email"])
+                is_kyc_pending = any(k in err_summary for k in ["kyc", "more info", "proof of id", "document", "proof of address"])
+
                 if is_already:
                     badge_text = "ℹ️ Existing"
                     badge_color = "#ffb74d"
                 elif is_verified:
                     badge_text = "🔐 Verified"
                     badge_color = "#81c784"
+                elif is_email_pending:
+                    badge_text = "✉️ Email Pending"
+                    badge_color = "#64b5f6"
+                elif is_kyc_pending:
+                    badge_text = "⚠️ KYC Pending"
+                    badge_color = "#ffa726"
                 else:
                     badge_text = "⏳ Unverified"
                     badge_color = "#ffa726"
@@ -579,7 +609,7 @@ class DataEntryBotGUI(ctk.CTk):
                     text=badge_text,
                     font=ctk.CTkFont(size=11, weight="bold"),
                     text_color=badge_color,
-                    width=85
+                    width=95
                 )
                 status_lbl.pack(side="right", padx=(4, 8), pady=6)
 
@@ -633,6 +663,7 @@ class DataEntryBotGUI(ctk.CTk):
             state_mgr = StateManager()
             all_recs = state_mgr.get_all_records()
             fails = [r for r in all_recs if r.get("status") in ("FAILED", "MANUAL_REVIEW")]
+            self.fail_count_label.configure(text=f"Total: {len(fails)} failures")
 
             if not fails:
                 empty_lbl = ctk.CTkLabel(
@@ -645,31 +676,162 @@ class DataEntryBotGUI(ctk.CTk):
                 return
 
             for idx, r in enumerate(fails):
-                row_frame = ctk.CTkFrame(self.fail_scroll_frame, fg_color="#2d1f1f", corner_radius=6)
+                status_val = r.get("status")
+                is_review = (status_val == "MANUAL_REVIEW")
+                row_frame = ctk.CTkFrame(
+                    self.fail_scroll_frame,
+                    fg_color="#33241b" if is_review else "#2d1f1f",
+                    corner_radius=6
+                )
                 row_frame.pack(fill="x", padx=5, pady=3)
 
-                info_lbl = ctk.CTkLabel(
-                    row_frame,
-                    text=f"⚠️ {r.get('client_name')} - {r.get('site_name')}: {r.get('error_summary', 'Unknown error')}",
-                    font=ctk.CTkFont(size=12),
-                    text_color="#ef9a9a",
-                    anchor="w"
-                )
+                client_id = r.get("client_id", "")
+                site_id = r.get("site_id", "")
+                client_name = r.get("client_name", "")
+                site_name = r.get("site_name", "")
+                password = r.get("password") or ""
+                email = r.get("email") or ""
 
-                info_lbl.pack(side="left", padx=10, pady=8, fill="x", expand=True)
+                # Action buttons packed to right first
+                dismiss_btn = ctk.CTkButton(
+                    row_frame,
+                    text="🗑️ Dismiss",
+                    width=70,
+                    height=24,
+                    fg_color="#444",
+                    hover_color="#555",
+                    command=lambda cid=client_id, sid=site_id: self._dismiss_single_failure_action(cid, sid)
+                )
+                dismiss_btn.pack(side="right", padx=(4, 8), pady=8)
+
+                if password:
+                    copy_btn = ctk.CTkButton(
+                        row_frame,
+                        text="📋 Copy Pwd",
+                        width=80,
+                        height=24,
+                        fg_color="#37474f",
+                        hover_color="#455a64",
+                        command=lambda p=password: self._copy_to_clipboard(p)
+                    )
+                    copy_btn.pack(side="right", padx=(4, 4), pady=8)
+
+                retry_btn = ctk.CTkButton(
+                    row_frame,
+                    text="🔁 Retry",
+                    width=65,
+                    height=24,
+                    fg_color="#1565c0",
+                    hover_color="#0d47a1"
+                )
+                retry_btn.configure(
+                    command=lambda cid=client_id, sid=site_id, cn=client_name, sn=site_name, btn=retry_btn: self._retry_single_failed_action(cid, sid, cn, sn, btn)
+                )
+                retry_btn.pack(side="right", padx=(4, 4), pady=8)
 
                 shot_path = r.get("screenshot_path")
                 if shot_path and Path(shot_path).exists():
                     def make_view_cmd(p):
                         return lambda: subprocess.Popen(f'explorer "{p}"')
                     view_btn = ctk.CTkButton(
-                        row_frame, text="🖼️ Screenshot", width=90, height=24, fg_color="#b71c1c", command=make_view_cmd(shot_path)
+                        row_frame, text="🖼️ Proof", width=65, height=24, fg_color="#b71c1c" if not is_review else "#e65100", command=make_view_cmd(shot_path)
                     )
-                    view_btn.pack(side="right", padx=10, pady=8)
+                    view_btn.pack(side="right", padx=(4, 4), pady=8)
 
+                # Badge label
+                badge_lbl = ctk.CTkLabel(
+                    row_frame,
+                    text="⚠️ KYC Review" if is_review else "❌ Failed",
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    text_color="#ffa726" if is_review else "#ef5350",
+                    width=85
+                )
+                badge_lbl.pack(side="left", padx=(10, 4), pady=8)
+
+                info_lbl = ctk.CTkLabel(
+                    row_frame,
+                    text=f"{client_name} ({site_name}): {r.get('error_summary', 'Unknown error')}",
+                    font=ctk.CTkFont(size=12),
+                    text_color="#ffe0b2" if is_review else "#ef9a9a",
+                    anchor="w"
+                )
+                info_lbl.pack(side="left", padx=4, pady=8, fill="x", expand=True)
 
         except Exception as e:
             logger.error(f"Failed to populate failures: {e}")
+
+    def _retry_single_failed_action(self, client_id: str, site_id: str, client_name: str, site_name: str, btn: ctk.CTkButton):
+        """Retries registration for a single failed client/site combination."""
+        btn.configure(state="disabled", text="⏳ Retrying...")
+        source = "excel" if self.src_selector.get() == "Excel (.xlsx)" else "sheets"
+        excel_path = Path(self.excel_path_var.get())
+        sheet_url = self.sheets_url_var.get()
+        provider = get_data_provider(source=source, excel_path=excel_path, sheet_url=sheet_url)
+        headed = "Visible" in self.browser_mode_selector.get()
+        verify_login = self.auto_verify_var.get()
+
+        def worker():
+            try:
+                logger.info(f"Retrying single failed registration for {client_name} ({client_id}) on {site_name} ({site_id})")
+                clients = provider.get_valid_clients()
+                target_client = next((c for c in clients if c.client_id == client_id), None)
+                if not target_client:
+                    target_client = next((c for c in clients if c.full_name.lower() == client_name.lower()), None)
+
+                if not target_client:
+                    logger.error(f"Could not locate client '{client_name}' ({client_id}) in data provider source.")
+                    self.after(0, lambda: messagebox.showerror("Client Not Found", f"Could not locate '{client_name}' in the data source to retry."))
+                    return
+
+                result = register_single_account(
+                    client=target_client,
+                    site_id=site_id,
+                    provider=provider,
+                    headed=headed,
+                    verify_login=verify_login
+                )
+
+                if result.status == RegistrationStatus.SUCCESS:
+                    logger.info(f"🎉 Retry successful for {client_name} on {site_name}!")
+                    self.after(0, lambda: messagebox.showinfo("Registration Successful", f"Account successfully created for {client_name} on {site_name}!"))
+                else:
+                    logger.warning(f"❌ Retry failed for {client_name} on {site_name}: {result.error_summary}")
+                    self.after(0, lambda: messagebox.showwarning("Registration Failed", f"Retry registration failed for {client_name} on {site_name}:\n\n{result.error_summary}"))
+            except Exception as e:
+                logger.error(f"Error retrying registration for {client_id}: {e}")
+                self.after(0, lambda err_s=str(e): messagebox.showerror("Retry Error", f"Error during retry registration: {err_s}"))
+            finally:
+                self.after(0, lambda: self._populate_registered_accounts())
+                self.after(0, lambda: self._populate_failures())
+                self.after(0, lambda: self._update_stats_display())
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _dismiss_single_failure_action(self, client_id: str, site_id: str):
+        try:
+            state_mgr = StateManager()
+            state_mgr.reset_record(client_id, site_id)
+            self._populate_failures()
+            self._update_stats_display()
+        except Exception as e:
+            logger.error(f"Failed to dismiss failure record: {e}")
+
+    def _clear_all_failures_action(self):
+        confirm = messagebox.askyesno(
+            "Clear All Failures",
+            "Are you sure you want to clear all recorded failures?\n\nThis will reset their status to pending so they can be re-evaluated."
+        )
+        if confirm:
+            try:
+                state_mgr = StateManager()
+                deleted = state_mgr.reset_all_failed()
+                logger.info(f"Cleared {deleted} failed record(s) from state database.")
+                self._populate_failures()
+                self._update_stats_display()
+                messagebox.showinfo("Failures Cleared", f"Successfully cleared {deleted} failure record(s).")
+            except Exception as e:
+                logger.error(f"Failed to clear failures: {e}")
+                messagebox.showerror("Error", f"Failed to clear failures: {e}")
 
     def _verify_single_account_action(self, client_id: str, site_id: str, email: str, password: str, client_name: str, site_name: str, btn: ctk.CTkButton):
         """Launches on-demand visible login verification for a single registered account."""
@@ -696,19 +858,26 @@ class DataEntryBotGUI(ctk.CTk):
                 )
                 if success:
                     logger.info(f"🎉 Login verified successfully for {email}! Proof: {proof_path}")
-                    self.after(0, lambda: messagebox.showinfo("Login Verified", f"Account successfully logged in!\nProof saved:\n{proof_path}"))
+                    self.after(0, lambda: messagebox.showinfo("Login Verified", f"Account successfully logged in!\n\nProof saved:\n{proof_path}"))
+                elif is_pending_verification_error(err or ""):
+                    logger.info(f"ℹ️ Account credentials valid for {email}, but pending user activation: {err}")
+                    self.after(0, lambda: messagebox.showinfo(
+                        "Account Created — Activation Required",
+                        f"Account credentials are valid for {client_name or email} on {site_name or site_id}!\n\n"
+                        f"Status: {err}\n\n"
+                        f"The credentials remain safely saved in your spreadsheet. The user needs to verify their email or upload documents before logging in."
+                    ))
                 else:
-                    logger.warning(f"❌ Login verification unconfirmed for {email}: {err}")
+                    logger.warning(f"❌ Login verification rejected for {email}: {err}")
                     self.after(0, lambda: messagebox.showwarning(
-                        "Login Verification Result",
-                        f"Login verification result for {client_name or email} on {site_name or site_id}:\n\n{err}"
+                        "Login Verification Failed",
+                        f"Login verification failed for {client_name or email} on {site_name or site_id}:\n\n{err}\n\nFalse positive record was removed from the spreadsheet."
                     ))
             except Exception as e:
                 logger.error(f"Exception during manual verification: {e}")
                 self.after(0, lambda err_s=str(e): messagebox.showerror("Verification Error", f"Error during verification: {err_s}"))
             finally:
-                self.after(0, lambda: self._populate_registered_accounts())
-                self.after(0, lambda: self._populate_failures())
+                self.after(0, lambda: self._update_stats_display())
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -753,6 +922,7 @@ class DataEntryBotGUI(ctk.CTk):
         limit = int(self.limit_slider.get())
         client_filter = self.filter_entry.get().strip() or None
         verify_login = self.auto_verify_var.get()
+        retry_failed = self.retry_failed_var.get()
 
         self.is_running = True
         self.btn_start.configure(state="disabled")
@@ -784,7 +954,9 @@ class DataEntryBotGUI(ctk.CTk):
                     client_id_filter=client_filter,
                     site_filters=selected_sites,
                     dry_run=dry_run,
-                    verify_login=verify_login
+                    verify_login=verify_login,
+                    retry_failed=retry_failed,
+                    on_progress=lambda res, st: self.after(0, self._on_single_record_progress)
                 )
 
             except Exception as e:
@@ -799,6 +971,10 @@ class DataEntryBotGUI(ctk.CTk):
 
         self.worker_thread = threading.Thread(target=worker, daemon=True)
         self.worker_thread.start()
+
+    def _on_single_record_progress(self):
+        """Called live in real-time on GUI main thread as each record completes."""
+        self._update_stats_display()
 
     def _stop_automation(self):
         self.status_badge.configure(text="● STOPPING...", text_color="#ef5350")

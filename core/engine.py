@@ -1,12 +1,12 @@
 import time
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Callable
 from config.settings import AUTO_VERIFY_LOGIN
 from data.base_provider import BaseDataProvider
 from data.models import Client, RegistrationResult, RegistrationStatus
 from core.state import StateManager
 from core.browser import BrowserManager
 from core.password_gen import generate_password
-from sites.base import BaseSiteAdapter
+from sites.base import BaseSiteAdapter, is_pending_verification_error
 from sites import get_site_adapters
 from core.logger import get_logger
 
@@ -34,28 +34,38 @@ class AutomationEngine:
         client_id_filter: Optional[str] = None,
         site_filters: Optional[List[str]] = None,
         dry_run: bool = False,
-        verify_login: bool = AUTO_VERIFY_LOGIN
+        verify_login: bool = AUTO_VERIFY_LOGIN,
+        retry_failed: bool = False,
+        on_progress: Optional[Callable[[RegistrationResult, dict], None]] = None
     ) -> dict:
         """Executes the signup pipeline for eligible clients across target websites."""
-        logger.info(f"Starting automation run (Limit: {limit}, Dry-Run: {dry_run}, Verify-Login: {verify_login})")
+        logger.info(f"Starting automation run (Limit: {limit}, Dry-Run: {dry_run}, Verify-Login: {verify_login}, Retry-Failed: {retry_failed})")
         
         # 1. Fetch eligible clients
         clients = self.provider.get_valid_clients()
         logger.info(f"Retrieved {len(clients)} valid client records from data source")
 
-        if client_id_filter:
-            clients = [c for c in clients if client_id_filter.lower() in c.client_id.lower() or client_id_filter.lower() in c.full_name.lower()]
-            logger.info(f"Filtered to {len(clients)} clients matching '{client_id_filter}'")
-
-        selected_clients = clients[:limit]
-        logger.info(f"Processing batch of {len(selected_clients)} clients")
-
         # 2. Filter site adapters if specified
         active_adapters = self.site_adapters
         if site_filters:
             active_adapters = [a for a in self.site_adapters if a.site_id in site_filters or a.site_name.lower() in [s.lower() for s in site_filters]]
-
+        active_site_ids = [a.site_id for a in active_adapters]
         logger.info(f"Active site adapters ({len(active_adapters)}): {[a.site_name for a in active_adapters]}")
+
+        # 3. Select batch clients (advancing past clients with no pending work)
+        if client_id_filter:
+            selected_clients = [c for c in clients if client_id_filter.lower() in c.client_id.lower() or client_id_filter.lower() in c.full_name.lower()][:limit]
+            logger.info(f"Targeting {len(selected_clients)} client(s) matching '{client_id_filter}'")
+        else:
+            pending_clients = [
+                c for c in clients
+                if self.state_mgr.has_pending_sites(c.client_id, active_site_ids, retry_failed=retry_failed)
+            ]
+            already_handled = len(clients) - len(pending_clients)
+            if already_handled > 0:
+                logger.info(f"Advancing past {already_handled} client(s) with no pending sites (Retry-Failed: {retry_failed})")
+            selected_clients = pending_clients[:limit]
+            logger.info(f"Processing batch of {len(selected_clients)} pending clients")
 
         if dry_run:
             logger.info("=== DRY RUN MODE: Validating client data only ===")
@@ -66,7 +76,7 @@ class AutomationEngine:
                 )
             return {"status": "dry_run_complete", "clients_validated": len(selected_clients)}
 
-        # 3. Main Execution Loop
+        # 4. Main Execution Loop
         stats = {"processed_clients": 0, "success_count": 0, "already_registered_count": 0, "failed_count": 0, "skipped_count": 0}
         
         try:
@@ -81,6 +91,13 @@ class AutomationEngine:
                     # Check if already completed / already registered
                     if self.state_mgr.is_complete(client.client_id, site.site_id):
                         logger.info(f"Skipping {site.site_name} for {client.full_name} (Already Completed or Registered)")
+                        stats["skipped_count"] += 1
+                        continue
+
+                    # Check if previously failed and retry_failed is False
+                    curr_status = self.state_mgr.get_status(client.client_id, site.site_id)
+                    if curr_status in (RegistrationStatus.FAILED, RegistrationStatus.MANUAL_REVIEW) and not retry_failed:
+                        logger.info(f"Skipping {site.site_name} for {client.full_name} (Previously Failed - retry_failed is False)")
                         stats["skipped_count"] += 1
                         continue
 
@@ -127,6 +144,15 @@ class AutomationEngine:
                                     result.login_screenshot_path = login_proof
                                     result.screenshot_path = login_proof
                                     logger.info(f"✅ Login verified with visual proof: {login_proof}")
+                                elif is_pending_verification_error(login_err or ""):
+                                    # Account was created successfully with valid credentials, but user email/KYC is pending
+                                    result.login_verified = False
+                                    result.login_screenshot_path = login_proof
+                                    result.screenshot_path = login_proof
+                                    result.error_summary = login_err
+                                    result.account_reference = f"{site.site_name} (Pending Activation)"
+                                    logger.info(f"ℹ️ Account created with valid credentials for {client.full_name}, but activation is pending ({login_err}). Preserving credentials.")
+                                    # Keep status as SUCCESS and DO NOT remove from spreadsheet
                                 else:
                                     # Conclusive proof that registration was not successful / credentials rejected
                                     result.status = RegistrationStatus.FAILED
@@ -160,6 +186,12 @@ class AutomationEngine:
                         else:
                             self.provider.record_failure(result)
                             stats["failed_count"] += 1
+
+                        if on_progress:
+                            try:
+                                on_progress(result, stats)
+                            except Exception:
+                                pass
 
                     except Exception as e:
                         logger.error(f"Execution error on {site.site_name} for {client.full_name}: {e}")
@@ -217,21 +249,26 @@ def verify_single_account(
             client_id=client_id
         )
 
+        is_pending = is_pending_verification_error(error_msg or "")
+
         state_mgr.update_login_verification(
             client_id=client_id,
             site_id=site_id,
             success=success,
             screenshot_path=proof_path,
-            error_summary=error_msg
+            error_summary=error_msg,
+            is_pending_verification=is_pending
         )
 
-        if not success:
-            # Remove false positive record from spreadsheet
+        if not success and not is_pending:
+            # Only remove false positive record from spreadsheet if credentials are truly invalid
             if provider:
                 c_name = client_name
                 s_name = site_name or adapter.site_name
                 deleted = provider.remove_success(client_name=c_name, site_name=s_name, email=email)
                 logger.info(f"Removed {deleted} false positive row(s) from provider for {client_id}")
+        elif is_pending:
+            logger.info(f"Account for {client_id} on {site_id} is valid but requires activation ({error_msg}). Preserving in spreadsheet.")
 
         try:
             context.close()

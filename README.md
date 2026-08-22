@@ -10,8 +10,9 @@ Includes both a **Modern Desktop GUI Application** and a **Command-Line Interfac
 
 - **Automated & On-Demand Post-Registration Login Verification:**
   - Automatically logs into the bookmaker account immediately upon successful registration to verify authentication and capture definitive logged-in dashboard proof (`_LOGIN_PROOF.png`).
+  - **Smart Verification & Activation Protection:** Distinguishes between false positive registrations (invalid credentials, which are removed from the results sheet) and valid accounts that require user email confirmation or KYC document upload (which are **safely preserved** in the results sheet and state with an `✉️ Email Pending` or `⚠️ KYC Pending` indicator).
   - **Desktop GUI Registered Accounts Hub:**
-    - Displays `🔐 Verified` vs `⏳ Unverified` badges per registered account.
+    - Displays `🔐 Verified`, `✉️ Email Pending`, `⚠️ KYC Pending`, `ℹ️ Existing`, and `⏳ Unverified` badges per registered account.
     - **`🔑 Verify` Button:** Triggers on-demand login execution in a background worker thread, tests authentication live, updates the database, and captures a fresh proof image.
     - **`🖼️ Proof` Button:** Opens the high-resolution logged-in screen proof immediately in the default viewer or Explorer.
     - **`📋 Copy` Button:** One-click clipboard copy for the generated password.
@@ -36,7 +37,8 @@ Includes both a **Modern Desktop GUI Application** and a **Command-Line Interfac
   - Automatic failure bundles in `logs/artifacts/` capturing full-page `.png` screenshots, raw HTML DOM snapshots (`.html`), and Playwright trace archives (`.zip`).
 - **Resilient & Idempotent State Management (`core/state.py`):**
   - Tracks registration and login verification states (`PENDING`, `IN_PROGRESS`, `SUCCESS`, `FAILED`, `MANUAL_REVIEW`, `SKIPPED`) in SQLite (`state.db`).
-  - Safely resumes interrupted jobs without repeating already completed accounts.
+  - **Automatic Batch Advancement & Failed Record Skipping:** Automatically skips previously finished (`SUCCESS`, `ALREADY_REGISTERED`) as well as previously failed (`FAILED`, `MANUAL_REVIEW`) records on subsequent batch runs so the engine moves smoothly to fresh clients.
+  - **Flexible Retry Controls:** Re-attempt failed records on-demand via the GUI (`🔁 Retry Failed Records` toggle or row-by-row `🔁 Retry` button in the Failures tab) or CLI (`--retry-failed`).
 - **Strong Password & Username Generator (`core/password_gen.py`):**
   - Generates secure, compliant passwords satisfying uppercase, lowercase, numeric, and special character policies.
 - **UK Data Normalization (`data/models.py`):**
@@ -96,6 +98,7 @@ data_entry_bot/
 │   ├── test_excel_provider.py
 │   ├── test_password_gen.py
 │   ├── test_state.py
+│   ├── test_batch_advancement.py
 │   ├── test_single_instance.py
 │   └── test_gui.py
 │
@@ -124,14 +127,31 @@ data_entry_bot/
   ```powershell
   python app.py --dry-run --source excel --input Test.xlsx
   ```
-- **Run Automation on Fairplay Bet:**
+- **Run Automation on Fairplay Bet (Advances to next pending clients):**
   ```powershell
   python app.py --headed --source excel --input Test.xlsx --sites fairplaybet --limit 5
+  ```
+- **Re-attempt Failed Records:**
+  ```powershell
+  python app.py --headed --source excel --input Test.xlsx --retry-failed --limit 10
   ```
 - **Run Google Sheets Mode:**
   ```powershell
   python app.py --headed --source sheets --limit 20
   ```
+
+---
+
+## Batch Advancement & Failure Handling
+
+1. **Automatic Batch Advancement:**
+   - On every batch run, `AutomationEngine` checks which clients still have pending registrations on the active site adapters.
+   - Any client who has already finished or failed on all selected sites is skipped, and the batch window automatically advances to the next set of unprocessed clients up to the chosen limit.
+2. **Handling Failures in the GUI ("⚠️ Failures & Review" Tab):**
+   - **`🔁 Retry` Button:** Runs on-demand registration for a single failed client/site.
+   - **`🗑️ Dismiss` Button:** Removes the failure record from the local SQLite state.
+   - **`🧹 Clear All Failures` Button:** Clears all recorded failures in one click to allow a fresh run across the entire list.
+   - **`🔁 Retry Failed Records` Toggle:** When enabled in the sidebar, batch runs will include previously failed records instead of skipping them.
 
 ---
 

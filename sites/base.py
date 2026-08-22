@@ -62,6 +62,36 @@ def is_already_registered_error(text: str) -> bool:
             return True
     return False
 
+PENDING_VERIFICATION_PATTERNS = [
+    r"verify your email",
+    r"verification (?:email|link)",
+    r"activation (?:email|link)",
+    r"check your (?:inbox|email)",
+    r"activate your account",
+    r"account (?:is )?not (?:yet )?(?:activated|verified)",
+    r"email (?:has not been|is not|not) verified",
+    r"more info needed",
+    r"proof of id",
+    r"proof of address",
+    r"electoral roll",
+    r"document upload",
+    r"upload (?:your )?documents",
+    r"kyc",
+    r"verify your details",
+    r"account pending verification",
+    r"require email verification",
+    r"email verification"
+]
+
+def is_pending_verification_error(text: str) -> bool:
+    """Returns True if the message indicates the account exists but requires user email or KYC verification."""
+    if not text:
+        return False
+    for pat in PENDING_VERIFICATION_PATTERNS:
+        if re.search(pat, text, re.IGNORECASE):
+            return True
+    return False
+
 COMMON_COOKIE_SELECTORS = [
 
     '#onetrust-accept-btn-handler',

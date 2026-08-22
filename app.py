@@ -78,6 +78,11 @@ def parse_args():
         action="store_true",
         help="Save Playwright execution traces for debugging."
     )
+    parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Re-attempt registrations for clients/sites that previously failed."
+    )
     return parser.parse_args()
 
 
@@ -92,7 +97,7 @@ def main():
 
     logger.info("=======================================================")
     logger.info("Starting Data Entry Client Signup Bot")
-    logger.info(f"Source: {args.source.upper()} | Headless: {headless} | Limit: {args.limit}")
+    logger.info(f"Source: {args.source.upper()} | Headless: {headless} | Limit: {args.limit} | Retry-Failed: {args.retry_failed}")
     logger.info("=======================================================")
 
     try:
@@ -127,7 +132,8 @@ def main():
             limit=args.limit,
             client_id_filter=args.client_id,
             site_filters=site_filters,
-            dry_run=args.dry_run
+            dry_run=args.dry_run,
+            retry_failed=args.retry_failed
         )
 
     except Exception as e:

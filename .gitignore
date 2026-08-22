@@ -50,3 +50,5 @@ client_secret*.json
 # OS Specific
 .DS_Store
 Thumbs.db
+~$*
+*.tmp

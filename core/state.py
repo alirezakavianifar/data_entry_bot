@@ -1,7 +1,7 @@
 import sqlite3
 import datetime
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from data.models import RegistrationStatus, RegistrationResult
 from config.settings import STATE_DB_PATH
 from core.logger import get_logger
@@ -91,6 +91,29 @@ class StateManager:
         status = self.get_status(client_id, site_id)
         return status in (RegistrationStatus.SUCCESS, RegistrationStatus.SKIPPED, RegistrationStatus.ALREADY_REGISTERED)
 
+    def is_processed(self, client_id: str, site_id: str, include_failed: bool = True) -> bool:
+        """
+        Returns True if the site signup has been executed.
+        If include_failed is True, both completed and failed records return True (i.e. not pending).
+        """
+        status = self.get_status(client_id, site_id)
+        if status in (RegistrationStatus.SUCCESS, RegistrationStatus.SKIPPED, RegistrationStatus.ALREADY_REGISTERED):
+            return True
+        if include_failed and status in (RegistrationStatus.FAILED, RegistrationStatus.MANUAL_REVIEW):
+            return True
+        return False
+
+    def has_pending_sites(self, client_id: str, site_ids: List[str], retry_failed: bool = False) -> bool:
+        """
+        Returns True if the client has at least one site in site_ids that still needs registration.
+        If retry_failed is False, failed sites are considered non-pending (skipped).
+        """
+        if not site_ids:
+            return False
+        for site_id in site_ids:
+            if not self.is_processed(client_id, site_id, include_failed=not retry_failed):
+                return True
+        return False
 
     def set_status(
         self,
@@ -163,9 +186,15 @@ class StateManager:
         site_id: str,
         success: bool,
         screenshot_path: Optional[str] = None,
-        error_summary: Optional[str] = None
+        error_summary: Optional[str] = None,
+        is_pending_verification: bool = False
     ):
-        """Updates login verification state and login proof screenshot. Downgrades status to FAILED if false."""
+        """
+        Updates login verification state and login proof screenshot.
+        If success: sets status='SUCCESS' and login_verified=1.
+        If is_pending_verification: preserves status='SUCCESS', records note, sets login_verified=0.
+        If false and not pending (e.g. invalid credentials): downgrades status to 'FAILED'.
+        """
         now = datetime.datetime.now().isoformat()
         conn = self._get_connection()
         try:
@@ -179,6 +208,17 @@ class StateManager:
                         updated_at = ?
                     WHERE client_id = ? AND site_id = ?
                 """, (screenshot_path, screenshot_path, now, client_id, site_id))
+            elif is_pending_verification:
+                # Valid credentials, but activation/verification is pending
+                conn.execute("""
+                    UPDATE client_site_status
+                    SET login_verified = 0,
+                        login_screenshot_path = COALESCE(?, login_screenshot_path),
+                        screenshot_path = COALESCE(?, screenshot_path),
+                        error_summary = COALESCE(?, error_summary),
+                        updated_at = ?
+                    WHERE client_id = ? AND site_id = ?
+                """, (screenshot_path, screenshot_path, error_summary, now, client_id, site_id))
             else:
                 conn.execute("""
                     UPDATE client_site_status
@@ -205,7 +245,18 @@ class StateManager:
         finally:
             conn.close()
 
-
+    def reset_all_failed(self) -> int:
+        """Resets all FAILED and MANUAL_REVIEW records so they can be re-run."""
+        conn = self._get_connection()
+        try:
+            cur = conn.execute(
+                "DELETE FROM client_site_status WHERE status IN ('FAILED', 'MANUAL_REVIEW')"
+            )
+            deleted = cur.rowcount
+            conn.commit()
+            return deleted
+        finally:
+            conn.close()
 
     def get_all_records(self, status: Optional[RegistrationStatus] = None) -> List[Dict]:
         """Returns all records sorted by updated_at descending, optionally filtered by status."""

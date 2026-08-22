@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional
 from config.settings import PROMO_LINKS_FILE
-from sites.base import BaseSiteAdapter
+from sites.base import BaseSiteAdapter, is_pending_verification_error
 from sites.fairplaybet import FairplayBetAdapter
 from sites.betfred import BetfredAdapter
 from sites.quinnbet import QuinnbetAdapter
