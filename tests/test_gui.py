@@ -1,10 +1,11 @@
 import time
 import pytest
 from gui.main_gui import DataEntryBotGUI
+from sites import DEFAULT_PROMO_LINKS, load_promo_config
 
 
 def test_gui_lifecycle_and_dry_run():
-    """Validates GUI initialization, source switching, and dry run execution."""
+    """Validates GUI initialization, source switching, promo tabs, and dry run execution."""
     app = DataEntryBotGUI()
     try:
         assert "Data Entry Bot" in app.title()
@@ -27,6 +28,12 @@ def test_gui_lifecycle_and_dry_run():
         app._select_stage1_only()
         assert app.site_checkbox_vars["fairplaybet"].get() is True
 
+        # Promo Links tab validation
+        assert hasattr(app, "tab_promos")
+        assert len(app.promo_field_entries) > 0
+        assert "fairplaybet" in app.promo_field_entries
+        assert app.promo_field_entries["fairplaybet"]["url_var"].get().startswith("http")
+
         # Dry-Run execution from GUI
         app.limit_slider.set(2)
         app._start_dry_run()
@@ -42,4 +49,3 @@ def test_gui_lifecycle_and_dry_run():
         assert "Starting automation run" in log_text or "Valid Client" in log_text
     finally:
         app.destroy()
-

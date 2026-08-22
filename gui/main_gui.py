@@ -22,10 +22,20 @@ from config.settings import (
 )
 from data.factory import get_data_provider
 from data.models import RegistrationStatus
+import webbrowser
 from core.browser import BrowserManager
 from core.state import StateManager
 from core.engine import AutomationEngine, verify_single_account, register_single_account
-from sites import get_site_adapters, load_promo_config
+from sites import (
+    get_site_adapters,
+    load_promo_config,
+    save_promo_config,
+    reset_promo_to_default,
+    add_or_update_promo_link,
+    delete_custom_promo_link,
+    is_valid_url,
+    DEFAULT_PROMO_LINKS
+)
 from sites.base import is_pending_verification_error
 
 # Set appearance mode and theme
@@ -62,6 +72,7 @@ class DataEntryBotGUI(ctk.CTk):
         self.worker_thread: Optional[threading.Thread] = None
         self.is_running = False
         self.stop_requested = False
+        self.promo_field_entries: Dict[str, dict] = {}
 
         # Register Loguru GUI sink
         self.gui_sink = GuiLogSink(self.log_queue)
@@ -74,6 +85,7 @@ class DataEntryBotGUI(ctk.CTk):
         # Build UI
         self._create_layout()
         self._load_site_checkboxes()
+        self._populate_promo_links_tab()
         self._update_stats_display()
 
         # Start Log Polling Loop
@@ -403,16 +415,83 @@ class DataEntryBotGUI(ctk.CTk):
         self.fail_scroll_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
         self.fail_scroll_frame.grid_columnconfigure(0, weight=1)
 
+        # Tab 4: Promo Links & Sites Settings
+        self.tab_promos = self.tabview.add("🔗 Promo Links & Sites")
+        self.tab_promos.grid_columnconfigure(0, weight=1)
+        self.tab_promos.grid_rowconfigure(1, weight=1)
+
+        self.promo_header = ctk.CTkFrame(self.tab_promos, fg_color="transparent")
+        self.promo_header.grid(row=0, column=0, sticky="ew", padx=10, pady=(5, 5))
+
+        self.promo_search_var = ctk.StringVar()
+        self.promo_search_var.trace_add("write", lambda *_: self._populate_promo_links_tab())
+        self.promo_search_entry = ctk.CTkEntry(
+            self.promo_header,
+            textvariable=self.promo_search_var,
+            placeholder_text="Search promo site or URL...",
+            width=240
+        )
+        self.promo_search_entry.pack(side="left", padx=(0, 10))
+
+        self.btn_add_promo = ctk.CTkButton(
+            self.promo_header,
+            text="➕ Add Custom Link",
+            width=140,
+            height=24,
+            fg_color="#1f538d",
+            hover_color="#163f6e",
+            command=self._open_add_promo_dialog
+        )
+        self.btn_add_promo.pack(side="left", padx=(0, 8))
+
+        self.btn_reset_all_promos = ctk.CTkButton(
+            self.promo_header,
+            text="🔄 Reset All Defaults",
+            width=140,
+            height=24,
+            fg_color="#444",
+            hover_color="#555",
+            command=self._reset_all_promos_action
+        )
+        self.btn_reset_all_promos.pack(side="left", padx=(0, 8))
+
+        self.btn_save_promos = ctk.CTkButton(
+            self.promo_header,
+            text="💾 Save All Changes",
+            width=140,
+            height=24,
+            font=ctk.CTkFont(weight="bold"),
+            fg_color="#2e7d32",
+            hover_color="#1b5e20",
+            command=self._save_all_promo_changes
+        )
+        self.btn_save_promos.pack(side="right")
+
+        self.promo_scroll_frame = ctk.CTkScrollableFrame(self.tab_promos, fg_color="#1e1e1e")
+        self.promo_scroll_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.promo_scroll_frame.grid_columnconfigure(0, weight=1)
+
     def _load_site_checkboxes(self):
+        # Clear existing widgets from matrix frame
+        for widget in self.sites_grid_frame.winfo_children():
+            widget.destroy()
+
         promo_cfg = load_promo_config()
         cols = 3
         r, c = 0, 0
+        old_vars = {k: v.get() for k, v in self.site_checkbox_vars.items()}
+        self.site_checkbox_vars.clear()
+
         for site_id, cfg in promo_cfg.items():
+            if not cfg.get("enabled", True):
+                continue
             name = cfg.get("name", site_id)
             req_uk = cfg.get("requires_uk_ip", True)
             badge = "(Any IP)" if not req_uk else "(UK IP)"
             
-            var = ctk.BooleanVar(value=True if site_id == "fairplaybet" else False)
+            # Default to previous selected state if available, else True for fairplaybet
+            init_val = old_vars.get(site_id, True if site_id == "fairplaybet" else False)
+            var = ctk.BooleanVar(value=init_val)
             self.site_checkbox_vars[site_id] = var
 
             chk = ctk.CTkCheckBox(
@@ -988,6 +1067,321 @@ class DataEntryBotGUI(ctk.CTk):
         self.status_badge.configure(text="● COMPLETED", text_color="#81c784")
         self.progress_bar.set(1.0)
         self._update_stats_display()
+
+    def _populate_promo_links_tab(self):
+        """Populates the Promo Links & Sites settings tab with interactive editable cards."""
+        for widget in self.promo_scroll_frame.winfo_children():
+            widget.destroy()
+
+        self.promo_field_entries: Dict[str, dict] = {}
+        promo_cfg = load_promo_config()
+        search = self.promo_search_var.get().strip().lower()
+
+        for site_id, cfg in promo_cfg.items():
+            name = cfg.get("name", site_id)
+            url = cfg.get("url", "")
+            link_type = cfg.get("link_type", "direct_promo")
+            req_uk = cfg.get("requires_uk_ip", True)
+            enabled = cfg.get("enabled", True)
+            notes = cfg.get("notes", "")
+
+            if search and search not in name.lower() and search not in url.lower() and search not in site_id.lower():
+                continue
+
+            card = ctk.CTkFrame(self.promo_scroll_frame, fg_color="#262626", corner_radius=8)
+            card.pack(fill="x", padx=5, pady=6)
+
+            # --- Row 0: Site Title, Badges, and Enabled Switch ---
+            top_bar = ctk.CTkFrame(card, fg_color="transparent")
+            top_bar.pack(fill="x", padx=12, pady=(10, 4))
+
+            title_lbl = ctk.CTkLabel(
+                top_bar,
+                text=f"🎯 {name}",
+                font=ctk.CTkFont(size=14, weight="bold")
+            )
+            title_lbl.pack(side="left", padx=(0, 10))
+
+            id_badge = ctk.CTkLabel(
+                top_bar,
+                text=f"id: {site_id}",
+                font=ctk.CTkFont(size=11),
+                text_color="gray"
+            )
+            id_badge.pack(side="left", padx=(0, 10))
+
+            ip_badge_text = "🇬🇧 UK IP" if req_uk else "🌐 Any IP"
+            ip_badge_color = "#3949ab" if req_uk else "#00897b"
+            ip_lbl = ctk.CTkLabel(
+                top_bar,
+                text=ip_badge_text,
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color=ip_badge_color
+            )
+            ip_lbl.pack(side="left", padx=(0, 10))
+
+            type_lbl = ctk.CTkLabel(
+                top_bar,
+                text=f"[{link_type.replace('_', ' ').title()}]",
+                font=ctk.CTkFont(size=11),
+                text_color="#90a4ae"
+            )
+            type_lbl.pack(side="left")
+
+            enabled_var = ctk.BooleanVar(value=enabled)
+            enable_switch = ctk.CTkSwitch(
+                top_bar,
+                text="Active" if enabled else "Inactive",
+                variable=enabled_var,
+                font=ctk.CTkFont(size=12)
+            )
+            enable_switch.pack(side="right")
+
+            # --- Row 1: URL Input Field & Actions ---
+            url_frame = ctk.CTkFrame(card, fg_color="transparent")
+            url_frame.pack(fill="x", padx=12, pady=(4, 6))
+
+            url_lbl = ctk.CTkLabel(url_frame, text="Promo URL:", font=ctk.CTkFont(weight="bold", size=12), width=80, anchor="w")
+            url_lbl.pack(side="left", padx=(0, 5))
+
+            url_var = ctk.StringVar(value=url)
+            url_entry = ctk.CTkEntry(url_frame, textvariable=url_var, font=ctk.CTkFont(family="Consolas", size=12))
+            url_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+            # Store references
+            self.promo_field_entries[site_id] = {
+                "name": name,
+                "url_var": url_var,
+                "url_entry": url_entry,
+                "enabled_var": enabled_var,
+                "requires_uk_ip": req_uk,
+                "link_type": link_type,
+                "notes": notes
+            }
+
+            # Action Buttons
+            btn_test = ctk.CTkButton(
+                url_frame,
+                text="🌐 Test",
+                width=65,
+                height=26,
+                fg_color="#0277bd",
+                hover_color="#01579b",
+                command=lambda v=url_var: self._test_url_in_browser(v.get())
+            )
+            btn_test.pack(side="right", padx=(3, 0))
+
+            btn_copy = ctk.CTkButton(
+                url_frame,
+                text="📋 Copy",
+                width=65,
+                height=26,
+                fg_color="#37474f",
+                hover_color="#455a64",
+                command=lambda v=url_var: self._copy_to_clipboard(v.get())
+            )
+            btn_copy.pack(side="right", padx=(3, 0))
+
+            if site_id in DEFAULT_PROMO_LINKS:
+                btn_reset = ctk.CTkButton(
+                    url_frame,
+                    text="🔄 Reset",
+                    width=65,
+                    height=26,
+                    fg_color="#455a64",
+                    hover_color="#546e7a",
+                    command=lambda s=site_id, v=url_var: self._reset_single_promo_ui(s, v)
+                )
+                btn_reset.pack(side="right", padx=(3, 0))
+            else:
+                btn_del = ctk.CTkButton(
+                    url_frame,
+                    text="🗑️ Delete",
+                    width=65,
+                    height=26,
+                    fg_color="#b71c1c",
+                    hover_color="#d32f2f",
+                    command=lambda s=site_id: self._delete_promo_action(s)
+                )
+                btn_del.pack(side="right", padx=(3, 0))
+
+            # --- Row 2: Notes / Warning info if applicable ---
+            if notes:
+                notes_frame = ctk.CTkFrame(card, fg_color="transparent")
+                notes_frame.pack(fill="x", padx=12, pady=(0, 8))
+                notes_lbl = ctk.CTkLabel(
+                    notes_frame,
+                    text=f"ℹ️ Note: {notes}",
+                    font=ctk.CTkFont(size=11),
+                    text_color="#ffa726",
+                    anchor="w"
+                )
+                notes_lbl.pack(side="left")
+
+    def _test_url_in_browser(self, url: str):
+        if not url or not is_valid_url(url):
+            messagebox.showwarning("Invalid URL", f"The URL '{url}' is not a valid HTTP/HTTPS URL.")
+            return
+        logger.info(f"Opening promo URL in default web browser: {url}")
+        webbrowser.open(url)
+
+    def _reset_single_promo_ui(self, site_id: str, url_var: ctk.StringVar):
+        if site_id in DEFAULT_PROMO_LINKS:
+            default_url = DEFAULT_PROMO_LINKS[site_id]["url"]
+            url_var.set(default_url)
+            logger.info(f"Reverted URL for '{site_id}' to factory default in UI.")
+
+    def _save_all_promo_changes(self):
+        new_config: Dict[str, dict] = {}
+        for site_id, field in self.promo_field_entries.items():
+            name = field["name"]
+            url = field["url_var"].get().strip()
+            enabled = field["enabled_var"].get()
+            requires_uk_ip = field["requires_uk_ip"]
+            link_type = field["link_type"]
+            notes = field["notes"]
+
+            if not url or not is_valid_url(url):
+                messagebox.showerror(
+                    "Invalid URL Detected",
+                    f"The URL for '{name}' ({site_id}) is invalid:\n\n'{url}'\n\nPlease ensure it starts with http:// or https://"
+                )
+                field["url_entry"].focus()
+                return
+
+            new_config[site_id] = {
+                "name": name,
+                "url": url,
+                "link_type": link_type,
+                "enabled": enabled,
+                "requires_uk_ip": requires_uk_ip
+            }
+            if notes:
+                new_config[site_id]["notes"] = notes
+
+        if save_promo_config(new_config):
+            self._load_site_checkboxes()
+            self._populate_promo_links_tab()
+            logger.info("Saved all promo links and site settings successfully.")
+            messagebox.showinfo("Saved", "All promo link changes have been saved successfully!")
+        else:
+            messagebox.showerror("Save Error", "Failed to write changes to promo_links.json.")
+
+    def _reset_all_promos_action(self):
+        confirm = messagebox.askyesno(
+            "Reset All Promo Links",
+            "Are you sure you want to reset ALL promo URLs and site configurations to factory defaults?\n\nThis will restore all official tested URLs."
+        )
+        if confirm:
+            reset_promo_to_default(None)
+            self._load_site_checkboxes()
+            self._populate_promo_links_tab()
+            logger.info("Reset all promo URLs to factory defaults.")
+            messagebox.showinfo("Reset Complete", "All promo links have been reset to factory defaults.")
+
+    def _delete_promo_action(self, site_id: str):
+        confirm = messagebox.askyesno(
+            "Delete Link",
+            f"Are you sure you want to delete custom link '{site_id}'?"
+        )
+        if confirm:
+            delete_custom_promo_link(site_id)
+            self._load_site_checkboxes()
+            self._populate_promo_links_tab()
+
+    def _open_add_promo_dialog(self):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Add New Promo / Affiliate Link")
+        dialog.geometry("520x470")
+        dialog.resizable(False, False)
+        dialog.grab_set()
+
+        title_lbl = ctk.CTkLabel(
+            dialog,
+            text="➕ Add New Bookmaker / Promo Link",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        title_lbl.pack(padx=20, pady=(20, 15), anchor="w")
+
+        id_lbl = ctk.CTkLabel(dialog, text="Site Identifier (Unique, e.g. 'bettinglounge_3'):", font=ctk.CTkFont(size=12, weight="bold"))
+        id_lbl.pack(padx=20, pady=(5, 2), anchor="w")
+        id_entry = ctk.CTkEntry(dialog, placeholder_text="e.g. bettinglounge_3")
+        id_entry.pack(fill="x", padx=20, pady=(0, 10))
+
+        name_lbl = ctk.CTkLabel(dialog, text="Display Name (e.g. 'Betting Lounge #3'):", font=ctk.CTkFont(size=12, weight="bold"))
+        name_lbl.pack(padx=20, pady=(5, 2), anchor="w")
+        name_entry = ctk.CTkEntry(dialog, placeholder_text="e.g. Betting Lounge #3")
+        name_entry.pack(fill="x", padx=20, pady=(0, 10))
+
+        url_lbl = ctk.CTkLabel(dialog, text="Target / Promo URL:", font=ctk.CTkFont(size=12, weight="bold"))
+        url_lbl.pack(padx=20, pady=(5, 2), anchor="w")
+        url_entry = ctk.CTkEntry(dialog, placeholder_text="https://...")
+        url_entry.pack(fill="x", padx=20, pady=(0, 10))
+
+        options_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        options_frame.pack(fill="x", padx=20, pady=(5, 10))
+
+        type_lbl = ctk.CTkLabel(options_frame, text="Link Type:", font=ctk.CTkFont(size=12, weight="bold"))
+        type_lbl.pack(side="left", padx=(0, 10))
+        type_opt = ctk.CTkOptionMenu(
+            options_frame,
+            values=["affiliate_redirect", "direct_promo", "direct"]
+        )
+        type_opt.set("affiliate_redirect")
+        type_opt.pack(side="left", padx=(0, 20))
+
+        uk_ip_var = ctk.BooleanVar(value=True)
+        uk_ip_switch = ctk.CTkSwitch(options_frame, text="Requires UK IP", variable=uk_ip_var)
+        uk_ip_switch.pack(side="left")
+
+        notes_lbl = ctk.CTkLabel(dialog, text="Notes (Optional):", font=ctk.CTkFont(size=12))
+        notes_lbl.pack(padx=20, pady=(5, 2), anchor="w")
+        notes_entry = ctk.CTkEntry(dialog, placeholder_text="e.g. Campaign expires Dec 2026")
+        notes_entry.pack(fill="x", padx=20, pady=(0, 15))
+
+        def save_new():
+            site_id = id_entry.get().strip().lower().replace(" ", "_")
+            site_name = name_entry.get().strip()
+            url = url_entry.get().strip()
+            link_type = type_opt.get()
+            req_uk = uk_ip_var.get()
+            notes = notes_entry.get().strip()
+
+            if not site_id:
+                messagebox.showwarning("Missing Site ID", "Please enter a unique Site Identifier.", parent=dialog)
+                return
+            if not site_name:
+                messagebox.showwarning("Missing Name", "Please enter a Display Name.", parent=dialog)
+                return
+            if not url or not is_valid_url(url):
+                messagebox.showwarning("Invalid URL", "Please enter a valid HTTP or HTTPS URL.", parent=dialog)
+                return
+
+            ok = add_or_update_promo_link(
+                site_id=site_id,
+                name=site_name,
+                url=url,
+                enabled=True,
+                requires_uk_ip=req_uk,
+                link_type=link_type,
+                notes=notes
+            )
+            if ok:
+                self._load_site_checkboxes()
+                self._populate_promo_links_tab()
+                dialog.destroy()
+                messagebox.showinfo("Success", f"Promo link '{site_name}' added successfully!")
+            else:
+                messagebox.showerror("Error", "Failed to add promo link.", parent=dialog)
+
+        btn_row = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_row.pack(fill="x", padx=20, pady=(5, 15))
+
+        btn_cancel = ctk.CTkButton(btn_row, text="Cancel", fg_color="#444", hover_color="#555", command=dialog.destroy, width=100)
+        btn_cancel.pack(side="right", padx=(10, 0))
+
+        btn_save = ctk.CTkButton(btn_row, text="Add Link", fg_color="#2e7d32", hover_color="#1b5e20", command=save_new, width=120)
+        btn_save.pack(side="right")
 
     def _maximize_window(self):
         try:

@@ -16,6 +16,12 @@ Includes both a **Modern Desktop GUI Application** and a **Command-Line Interfac
     - **`🔑 Verify` Button:** Triggers on-demand login execution in a background worker thread, tests authentication live, updates the database, and captures a fresh proof image.
     - **`🖼️ Proof` Button:** Opens the high-resolution logged-in screen proof immediately in the default viewer or Explorer.
     - **`📋 Copy` Button:** One-click clipboard copy for the generated password.
+- **Configurable Promo & Affiliate Links Management (Desktop GUI & Config):**
+  - **Dedicated "🔗 Promo Links & Sites" Tab:** View, edit, test, and manage all bookmaker promo URLs and affiliate tracking codes directly in the GUI without touching JSON files or Python code.
+  - **🌐 Test URL in Browser:** Click "Test" to instantly open any promo/landing page in your default browser to verify it is active and not returning 404 or expired.
+  - **➕ Add Custom Links:** Add new affiliate redirect or promo campaigns on the fly.
+  - **🔄 Reset to Defaults:** Revert any single site or all sites to official factory default URLs at any time.
+  - **Instant Live Synchronization:** Saving promo changes immediately updates the Target Websites Matrix on the dashboard for subsequent runs.
 - **Modern Desktop GUI Application (`gui_app.py` / `run_desktop_app.bat`):**
   - Sleek dark theme interface with intuitive controls.
   - Interactive Data Source picker (`Excel` file browser vs `Google Sheets` URL).
@@ -28,8 +34,6 @@ Includes both a **Modern Desktop GUI Application** and a **Command-Line Interfac
 - **Dual Data Source Support:**
   - **Local Excel Mode:** Reads from `Test.xlsx` (`'Client Details'` tab starting at row 3) and writes credentials directly to `'Succesful Signuos'` tab.
   - **Google Sheets Mode:** Connects live via `gspread` service account credentials with identical input and output mapping.
-- **Dynamic Promo Links (`config/promo_links.json`):**
-  - Switch or update promotional URLs, campaigns, and affiliate tracking IDs without modifying Python code.
 - **Multi-Modal Diagnostic & Failure Logging:**
   - Standardized console logs and rolling `logs/bot.log`.
   - Dedicated `logs/error.log` for warnings and errors with stack traces.
@@ -77,7 +81,7 @@ data_entry_bot/
 │   └── main_gui.py              # CustomTkinter modern desktop GUI app
 │
 ├── sites/
-│   ├── __init__.py              # Site adapter registry & factory
+│   ├── __init__.py              # Site adapter registry, promo config manager & factory
 │   ├── base.py                  # BaseSiteAdapter lifecycle, login verification & error handling
 │   ├── fairplaybet.py           # Fairplay Bet registration & login adapter
 │   ├── betfred.py               # Betfred registration & login adapter
@@ -99,6 +103,7 @@ data_entry_bot/
 │   ├── test_excel_provider.py
 │   ├── test_password_gen.py
 │   ├── test_state.py
+│   ├── test_promo_links_config.py
 │   ├── test_batch_advancement.py
 │   ├── test_single_instance.py
 │   └── test_gui.py
@@ -143,6 +148,19 @@ data_entry_bot/
 
 ---
 
+## Managing Promo & Affiliate Links
+
+In the Desktop GUI:
+1. Open the **"🔗 Promo Links & Sites"** tab.
+2. Edit any URL in the text box (e.g. updating a new campaign code or affiliate URL).
+3. Click **`🌐 Test`** to verify the landing page opens and works in your browser.
+4. Toggle the **Active / Inactive** switch to enable or disable specific sites.
+5. Click **`💾 Save All Changes`** to persist the updates to `config/promo_links.json`.
+6. To restore baseline URLs, click **`🔄 Reset`** on any row, or **`🔄 Reset All Defaults`** at the top.
+7. To add a new partner site or campaign, click **`➕ Add Custom Link`**.
+
+---
+
 ## Batch Advancement & Failure Handling
 
 1. **Automatic Batch Advancement:**
@@ -173,7 +191,6 @@ data_entry_bot/
      - The database status is reset to `FAILED` / `PENDING`.
      - The user is notified via dialog, and the record can now be freshly re-registered.
    - Click **`🖼️ Proof`** to instantly open the verified logged-in screenshot proof.
-
 
 ---
 
@@ -212,5 +229,4 @@ Run the complete pytest test suite:
 ```powershell
 pytest
 ```
-All unit tests verify phone normalization, datetime DOB handling, password complexity, state management, login verification records, Excel provider reading/writing, and GUI initialization.
-
+All unit tests verify phone normalization, datetime DOB handling, password complexity, state management, promo links configuration & persistence, login verification records, Excel provider reading/writing, and GUI initialization.
