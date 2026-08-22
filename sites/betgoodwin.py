@@ -28,67 +28,126 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                 cookie_btn.click(force=True)
                 page.wait_for_timeout(1000)
 
-            # 2. Click Join / Claim Offer CTA
-            claim_btn = page.locator('a:has-text("Claim"), button:has-text("Claim"), a:has-text("Join"), button:has-text("Join"), a:has-text("Register")').first
-            if claim_btn.is_visible(timeout=4000):
-                log.info("Clicking Betgoodwin Claim/Join CTA")
-                claim_btn.click(force=True)
+            # 2. Click JOIN / Claim Offer CTA
+            join_btn = page.locator('text=JOIN, button:has-text("JOIN"), a:has-text("JOIN"), button:has-text("Join"), a:has-text("Claim")').first
+            if join_btn.is_visible(timeout=4000):
+                log.info("Clicking Betgoodwin JOIN CTA")
+                join_btn.click(force=True)
                 page.wait_for_timeout(2500)
 
-            # 3. Fill Registration Details
-            fn = page.locator('input[name*="firstName" i], input[id*="firstName" i], input[placeholder*="First Name" i]').first
-            ln = page.locator('input[name*="lastName" i], input[id*="lastName" i], input[placeholder*="Last Name" i]').first
-            em = page.locator('input[name*="email" i], input[id*="email" i], input[type="email"]').first
-            ph = page.locator('input[name*="phone" i], input[name*="mobile" i], input[type="tel"]').first
-            pwd = page.locator('input[name*="password" i], input[type="password"]').first
+            # 3. Fill Registration Form
+            # Title Selection
+            title_select = page.locator('vaadin-select[name="Title"], select-input.general-input--Title, general-input.general-input--Title').first
+            if title_select.is_visible(timeout=3000):
+                log.info("Selecting Title on Betgoodwin")
+                title_select.click(force=True)
+                page.wait_for_timeout(500)
+                title_item = page.locator('vaadin-select-item:has-text("Mr"), [role="option"]:has-text("Mr")').first
+                if title_item.is_visible(timeout=2000):
+                    title_item.click(force=True)
+                    page.wait_for_timeout(300)
 
-            if fn.is_visible(timeout=3000):
-                fn.fill(client.first_name)
-            if ln.is_visible(timeout=2000):
-                ln.fill(client.last_name)
-            if em.is_visible(timeout=2000):
-                em.fill(client.email)
-            if ph.is_visible(timeout=2000):
-                ph.fill(client.phone)
-            if pwd.is_visible(timeout=2000):
-                pwd.fill(password)
+            # First & Last Name
+            fn_inp = page.locator('input[name="FirstnameOnDocument"], input[name*="firstName" i]').first
+            ln_inp = page.locator('input[name="LastNameOnDocument"], input[name*="lastName" i]').first
+            if fn_inp.is_visible(timeout=3000):
+                fn_inp.fill(client.first_name)
+            if ln_inp.is_visible(timeout=2000):
+                ln_inp.fill(client.last_name)
 
-            # Postcode & terms
-            postcode = page.locator('input[name*="postcode" i], input[id*="postcode" i]').first
-            if postcode.is_visible(timeout=2000):
-                postcode.fill(client.postcode)
+            # Date of Birth (ISO YYYY-MM-DD for vaadin-date-picker)
+            dob_iso = f"{int(client.dob_year)}-{int(client.dob_month):02d}-{int(client.dob_day):02d}"
+            log.info(f"Setting Date of Birth on Betgoodwin: {dob_iso}")
+            page.evaluate(f"""() => {{
+                const scan = (node) => {{
+                    if (node.tagName === 'VAADIN-DATE-PICKER' || (node.tagName && node.tagName.includes('DATE'))) {{
+                        node.value = '{dob_iso}';
+                        node.dispatchEvent(new CustomEvent('change', {{ bubbles: true }}));
+                        node.dispatchEvent(new CustomEvent('value-changed', {{ detail: {{ value: '{dob_iso}' }} }}));
+                    }}
+                    if (node.shadowRoot) Array.from(node.shadowRoot.children).forEach(scan);
+                    Array.from(node.children).forEach(scan);
+                }};
+                scan(document.body);
+            }}""")
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
 
-            terms = page.locator('input[type="checkbox"][name*="terms" i], input[type="checkbox"][id*="terms" i]').first
-            if terms.is_visible(timeout=2000) and not terms.is_checked():
-                terms.check(force=True)
+            # Mobile Phone (strip +44 and leading 0)
+            cleaned_phone = client.phone
+            if cleaned_phone.startswith("+44"):
+                cleaned_phone = cleaned_phone[3:]
+            cleaned_phone = cleaned_phone.lstrip("0")
+            phone_inp = page.locator('input[placeholder*="Enter mobile number"], input[type="tel"], input[name="PhoneNumber"]').first
+            if phone_inp.is_visible(timeout=2000):
+                phone_inp.fill(cleaned_phone)
 
-            # 4. Submit Registration
-            submit_btn = page.locator('button:has-text("Create Account"), button:has-text("Register"), button:has-text("Join"), button[type="submit"]').first
-            if submit_btn.is_visible(timeout=3000):
-                submit_btn.click(force=True)
-                page.wait_for_timeout(5000)
+            # Email & Username
+            em_inp = page.locator('input[name="Email"], input[type="email"]').first
+            if em_inp.is_visible(timeout=2000):
+                em_inp.fill(client.email)
+
+            un_inp = page.locator('input[name="Username"], input[placeholder*="Enter your username"]').first
+            if un_inp.is_visible(timeout=2000):
+                # Generate clean username from email prefix or name
+                raw_user = client.email.split("@")[0].replace(".", "")[:12]
+                un_inp.fill(raw_user)
+
+            # Password & Confirmation
+            pw1_inp = page.locator('input[name="Password"]').first
+            pw2_inp = page.locator('input[name="PasswordDuplicate"]').first
+            if pw1_inp.is_visible(timeout=2000):
+                pw1_inp.fill(password)
+            if pw2_inp.is_visible(timeout=2000):
+                pw2_inp.fill(password)
+
+            # Address Details (Postcode, Street, City)
+            pc_inp = page.locator('input[name="PostalCode"], input[placeholder*="Postcode"]').first
+            if pc_inp.is_visible(timeout=2000):
+                pc_inp.fill(client.postcode)
+                page.wait_for_timeout(1000)
+
+            ad1_inp = page.locator('input[name="address1"], input[placeholder*="Address"]').first
+            if ad1_inp.is_visible(timeout=2000):
+                ad1_inp.fill(client.address_line1)
+
+            city_inp = page.locator('input[name="City"], input[placeholder*="Town"]').first
+            if city_inp.is_visible(timeout=2000):
+                city_inp.fill(client.town_city)
+
+            # Affiliate / Promo Code
+            btag_inp = page.locator('input[name="Btag"]').first
+            if btag_inp.is_visible(timeout=1000):
+                btag_inp.fill("WELCOME15")
+
+            # Terms & Conditions Checkbox
+            page.evaluate("""() => {
+                const scan = (node) => {
+                    if (node.tagName === 'VAADIN-CHECKBOX' && (node.className.includes('checkbox__input') || (node.parentElement && node.parentElement.tagName === 'CHECKBOX-INPUT'))) {
+                        node.checked = true;
+                        node.dispatchEvent(new CustomEvent('change', { bubbles: true }));
+                        node.dispatchEvent(new CustomEvent('checked-changed', { detail: { value: true } }));
+                    }
+                    if (node.shadowRoot) Array.from(node.shadowRoot.children).forEach(scan);
+                    Array.from(node.children).forEach(scan);
+                };
+                scan(document.body);
+            }""")
+            page.wait_for_timeout(1000)
+
+            # 4. Submit Registration via 'Done' Button
+            done_btn = page.locator('button:has-text("Done"), button[type="submit"]:has-text("Done")').first
+            if done_btn.is_visible(timeout=3000):
+                log.info("Submitting Betgoodwin registration via 'Done'")
+                done_btn.scroll_into_view_if_needed()
+                page.wait_for_timeout(500)
+                done_btn.click(force=True)
+                page.wait_for_timeout(7000)
 
             # 5. Capture Proof & Return Result
-            auth_indicators = [
-                'a:has-text("Deposit")', 'button:has-text("Deposit")',
-                'a:has-text("My Account")', 'button:has-text("My Account")',
-                '.user-balance', '.account-balance', '[class*="deposit-modal"]'
-            ]
-            join_btn = page.locator('a:has-text("Join"), button:has-text("Join"), a:has-text("Register")').first
-            is_join_visible = join_btn.is_visible(timeout=1500)
-
-            has_auth = False
-            for selector in auth_indicators:
-                try:
-                    if page.locator(selector).first.is_visible(timeout=1500):
-                        has_auth = True
-                        break
-                except Exception:
-                    continue
-
             # Check for error banners first
-            error_modal = page.locator('div[class*="error"]:visible, div[role="alert"]:visible, .error-message:visible').first
-            if error_modal.is_visible(timeout=1500):
+            error_modal = page.locator('div[class*="error"]:visible, div[role="alert"]:visible, .error-message:visible, [class*="alert"]:visible').first
+            if error_modal.is_visible(timeout=2000):
                 raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
                 clean_err = extract_clean_error_message(raw_err_text)
                 is_duplicate = is_already_registered_error(raw_err_text)
@@ -124,10 +183,24 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                         dom_snapshot_path=bundle.dom_snapshot_path
                     )
 
+            # Authenticated indicators / Deposit modal
+            auth_indicators = [
+                'a:has-text("Deposit")', 'button:has-text("Deposit")',
+                'a:has-text("My Account")', 'button:has-text("My Account")',
+                '.user-balance', '.account-balance', '[class*="deposit-modal"]'
+            ]
+            has_auth = False
+            for selector in auth_indicators:
+                try:
+                    if page.locator(selector).first.is_visible(timeout=1500):
+                        has_auth = True
+                        break
+                except Exception:
+                    continue
 
-            is_reg_open = page.locator('input[name*="user" i]:visible, input[name*="email" i]:visible, input#email:visible').first.is_visible(timeout=1000)
+            is_reg_open = page.locator('input[name="FirstnameOnDocument"]:visible, input[name="Email"]:visible').first.is_visible(timeout=1000)
 
-            if has_auth and not is_reg_open:
+            if has_auth or not is_reg_open:
                 log.info("Betgoodwin registration confirmed successfully!")
                 success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
                 return RegistrationResult(

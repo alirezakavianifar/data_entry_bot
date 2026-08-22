@@ -41,10 +41,10 @@
     "enabled": true,
     "requires_uk_ip": true
   },
-  "bettinglounge1": {
-    "name": "Betting Lounge #1 (Bet St George)",
-    "url": "https://bettinglounge.co.uk/out/aYBjbREAACoASoCM/?offer=betting",
-    "link_type": "affiliate_redirect",
+  "betstgeorge": {
+    "name": "Bet St George",
+    "url": "https://betstgeorge.com/?promo=B20G20afs&btag=6a8954687602ed96cd480d2c_699f0c4baa77fde72d25e55f&affiliateId=69c6b31e35700061a8907364",
+    "link_type": "direct_promo",
     "enabled": true,
     "requires_uk_ip": true
   },

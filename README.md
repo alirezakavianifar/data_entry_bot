@@ -86,6 +86,7 @@ data_entry_bot/
 │   ├── planetsportbet.py        # Planet Sport Bet registration & login adapter
 │   ├── starsports.py            # Star Sports registration & login adapter
 │   ├── betgoodwin.py            # Betgoodwin registration & login adapter
+│   ├── betstgeorge.py           # Bet St George registration & login adapter
 │   └── affiliate_redirects.py   # Betting Lounge affiliate redirect handler
 │
 ├── logs/

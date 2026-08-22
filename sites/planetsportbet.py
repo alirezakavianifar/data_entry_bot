@@ -23,9 +23,12 @@ class PlanetSportBetAdapter(BaseSiteAdapter):
 
         try:
             # 1. Direct navigation to clean signup URL or trigger modal
-            if not page.url.endswith("?account=signup"):
-                page.goto("https://planetsportbet.com/?account=signup", wait_until="domcontentloaded", timeout=25000)
-                page.wait_for_timeout(2000)
+            if "?account=signup" not in page.url and "?promoId=" not in page.url:
+                try:
+                    page.goto("https://planetsportbet.com/?account=signup", wait_until="domcontentloaded", timeout=25000)
+                    page.wait_for_timeout(2000)
+                except Exception as ex:
+                    log.warning(f"Direct signup navigation warning: {ex}")
 
             # Cookiebot Consent Handling
             cookie_btn = page.locator('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll, #CybotCookiebotDialogBodyButtonAccept, button:has-text("Allow all"), button:has-text("Accept")').first
@@ -34,8 +37,8 @@ class PlanetSportBetAdapter(BaseSiteAdapter):
                 cookie_btn.click(force=True)
                 page.wait_for_timeout(1000)
 
-            # Check if sign up modal is open
-            email_inp = page.locator('input[data-test="email-input"]').first
+            # Check if sign up modal or landing form is open
+            email_inp = page.locator('input[data-test="landing-page-email-input"], input[data-test="email-input"], input[placeholder*="Email"]').first
             if not email_inp.is_visible(timeout=3000):
                 reg_btn = page.locator('a[data-test="account-navigation-signup-link"], a:has-text("Sign Up"), button:has-text("Sign Up")').first
                 if reg_btn.is_visible(timeout=3000):
@@ -44,8 +47,8 @@ class PlanetSportBetAdapter(BaseSiteAdapter):
                     page.wait_for_timeout(2000)
 
             # 2. Step 1: Credentials
-            email_inp = page.locator('input[data-test="email-input"]').first
-            pwd_inp = page.locator('input[data-test="create-password-input"]').first
+            email_inp = page.locator('input[data-test="landing-page-email-input"], input[data-test="email-input"], input[placeholder*="Email"]').first
+            pwd_inp = page.locator('input[data-test="landing-page-password-input"], input[data-test="create-password-input"], input[placeholder*="password"]').first
 
             if not email_inp.is_visible(timeout=4000) or not pwd_inp.is_visible(timeout=4000):
                 bundle = capture_failure_bundle(page, client.client_id, self.site_id, "step1_inputs_missing")
@@ -66,7 +69,7 @@ class PlanetSportBetAdapter(BaseSiteAdapter):
             pwd_inp.fill(password)
             page.wait_for_timeout(500)
 
-            create_acc_btn = page.locator('button[data-test="create-account-button"]').first
+            create_acc_btn = page.locator('button:has-text("Join Here"), button[data-test="create-account-button"], button[type="submit"]:has-text("Join"), button[type="submit"]:has-text("Sign Up")').first
             if create_acc_btn.is_visible(timeout=2000):
                 create_acc_btn.click(force=True)
                 page.wait_for_timeout(3000)
@@ -113,51 +116,80 @@ class PlanetSportBetAdapter(BaseSiteAdapter):
                     screenshot_path=bundle.screenshot_path
                 )
 
+            # Select Title (Mr / Ms)
+            title_el = page.locator('[data-test="mr-title-choose-box"], [data-test="title-choose-box"] div:first-child, label:has-text("Mr")').first
+            if title_el.is_visible(timeout=2000):
+                title_el.click(force=True)
+                page.wait_for_timeout(300)
+
             log.info("Filling Step 2 Personal Details (Name, DOB, Phone, Postcode)")
             fn_inp.fill(client.first_name)
             ln_inp.fill(client.last_name)
-            day_inp.fill(f"{client.dob_day:02d}")
-            month_inp.fill(f"{client.dob_month:02d}")
+            day_inp.fill(str(int(client.dob_day)).zfill(2))
+            month_inp.fill(str(int(client.dob_month)).zfill(2))
             year_inp.fill(str(client.dob_year))
 
             # Phone number (strip leading 0 as UK prefix +44 is pre-selected)
-            cleaned_phone = client.phone.lstrip("0")
+            cleaned_phone = client.phone
+            if cleaned_phone.startswith("+44"):
+                cleaned_phone = cleaned_phone[3:]
+            cleaned_phone = cleaned_phone.lstrip("0")
             num_inp.fill(cleaned_phone)
 
             # Postcode & Address Lookup
             postcode_inp.fill(client.postcode)
             page.wait_for_timeout(500)
 
-            search_addr_btn = page.locator('button[data-test="sign-up-search-address-button"]').first
+            search_addr_btn = page.locator('button[data-test="sign-up-search-address-button"], button:has-text("Search")').first
             if search_addr_btn.is_visible(timeout=2000):
                 log.info(f"Searching address for postcode: {client.postcode}")
                 search_addr_btn.click(force=True)
                 page.wait_for_timeout(2500)
 
-                # Select first matching address
-                addr_item = page.locator('li[data-component="AddressesListItemWrapper"], ul[class*="AddressesList"] li').first
-                if addr_item.is_visible(timeout=3000):
-                    log.info(f"Selected address: {addr_item.inner_text().strip()}")
-                    addr_item.click(force=True)
-                    page.wait_for_timeout(1000)
+                # Select matching address or traverse nested dropdown
+                addr_list = page.locator('li[data-component="AddressesListItemWrapper"], ul[class*="AddressesList"] li')
+                if addr_list.count() > 0:
+                    log.info(f"Selecting address: {addr_list.first.inner_text().strip()}")
+                    addr_list.first.click(force=True)
+                    page.wait_for_timeout(1500)
+                    if addr_list.count() > 0:
+                        log.info(f"Selecting specific street address: {addr_list.first.inner_text().strip()}")
+                        addr_list.first.click(force=True)
+                        page.wait_for_timeout(1000)
+
+                # Fallback to manual entry if address input is not yet populated
+                addr1 = page.locator('input[data-test="first-line-address-input"], input[name="address-1"]').first
+                if not addr1.is_visible(timeout=1000):
+                    manual_btn = page.locator('a:has-text("Enter Manually"), button:has-text("Enter Manually"), span:has-text("Enter Manually")').first
+                    if manual_btn.is_visible(timeout=1000):
+                        manual_btn.click(force=True)
+                        page.wait_for_timeout(1000)
+                        if addr1.is_visible(timeout=1000):
+                            addr1.fill(client.address_line1)
+                            city_inp = page.locator('input[data-test="town-city-input"], input[name="town-city"]').first
+                            if city_inp.is_visible(timeout=1000):
+                                city_inp.fill(client.town_city)
 
             # 4. Step 2 Submission: Agree & Join
             agree_btn = page.locator('button[data-test="agree-and-join-button"]').first
             if agree_btn.is_visible(timeout=3000):
                 log.info("Submitting registration via 'Agree & Join'")
+                agree_btn.scroll_into_view_if_needed()
+                page.wait_for_timeout(500)
                 agree_btn.click(force=True)
                 page.wait_for_timeout(6000)
 
             # 5. Confirm Registration Success
-            # Check for error banners first
-            error_modal = page.locator('div[class*="error"]:visible, div[role="alert"]:visible, .error-message:visible').first
-            if error_modal.is_visible(timeout=1500):
-                raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
+            # Check for error message under Agree & Join or in SignUpStepsContainer
+            error_el = page.locator('[data-test="error-message-content"]:visible, aside[data-test="SignUpStepsContainer"] [class*="MessageWrapper"]:visible, [data-test*="error"]:visible').first
+            if error_el.is_visible(timeout=3000):
+                raw_err_text = error_el.inner_text().strip().replace("\n", " - ")
                 clean_err = extract_clean_error_message(raw_err_text)
-                is_duplicate = is_already_registered_error(raw_err_text)
+                is_duplicate = is_already_registered_error(raw_err_text) or "operating license" in raw_err_text.lower() or "regret to inform" in raw_err_text.lower()
+                final_err_msg = clean_err or raw_err_text
 
                 if is_duplicate:
-                    log.warning(f"⚠️ Planet Sport Bet: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
+                    log.warning(f"[DUPLICATE] Planet Sport Bet: Client {client.full_name} is ALREADY REGISTERED ({final_err_msg})")
                     bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
                     return RegistrationResult(
                         client_id=client.client_id,
@@ -167,13 +199,13 @@ class PlanetSportBetAdapter(BaseSiteAdapter):
                         status=RegistrationStatus.ALREADY_REGISTERED,
                         email=client.email,
                         password=password,
-                        error_summary=f"Already registered: {clean_err}",
+                        error_summary=f"Already registered: {final_err_msg}",
                         screenshot_path=bundle.screenshot_path,
                         dom_snapshot_path=bundle.dom_snapshot_path
                     )
                 else:
-                    log.warning(f"Planet Sport Bet registration rejected: {clean_err}")
-                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(clean_err))
+                    log.warning(f"Planet Sport Bet registration rejected: {final_err_msg}")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(final_err_msg))
                     return RegistrationResult(
                         client_id=client.client_id,
                         client_name=client.full_name,
@@ -182,18 +214,30 @@ class PlanetSportBetAdapter(BaseSiteAdapter):
                         status=RegistrationStatus.FAILED,
                         email=client.email,
                         password=password,
-                        error_summary=clean_err,
+                        error_summary=final_err_msg,
                         screenshot_path=bundle.screenshot_path,
                         dom_snapshot_path=bundle.dom_snapshot_path
                     )
 
+            # Handle Safer Gambling modal if present
+            safer_modal = page.locator('legend:has-text("SAFER GAMBLING"), h2:has-text("SAFER GAMBLING"), [data-test*="safer-gambling"]').first
+            if safer_modal.is_visible(timeout=3000):
+                log.info("Safer Gambling modal detected, progressing...")
+                ack_toggle = page.locator('span[class*="switch"], [role="switch"], label:has-text("deposit limit"), [class*="Switch"]').last
+                if ack_toggle.is_visible(timeout=1500):
+                    ack_toggle.click(force=True)
+                    page.wait_for_timeout(500)
+                next_btn = page.locator('button:has-text("Next"), button:has-text("NEXT"), button[data-test*="next"]').first
+                if next_btn.is_visible(timeout=2000):
+                    next_btn.click(force=True)
+                    page.wait_for_timeout(4000)
 
             # Authenticated indicators / Deposit modal / KYC prompt
             auth_indicators = [
                 'a:has-text("Deposit")', 'button:has-text("Deposit")',
                 'a:has-text("My Account")', 'button:has-text("My Account")',
                 '[data-component="AccountNavigation"] [data-test*="account"]',
-                '.user-balance', '[class*="balance"]', '[class*="deposit-modal"]'
+                '.user-balance', '[class*="deposit-modal"]', 'h1:has-text("SAFER GAMBLING")'
             ]
             has_auth = False
             for selector in auth_indicators:
@@ -204,10 +248,10 @@ class PlanetSportBetAdapter(BaseSiteAdapter):
                 except Exception:
                     continue
 
-            # Check if registration form is still open
-            is_reg_open = page.locator('input[name="email"]:visible, input[name="password"]:visible, input#email:visible').first.is_visible(timeout=1000)
+            # Check if signup form is still open
+            agree_still_open = page.locator('button[data-test="agree-and-join-button"]:visible').first.is_visible(timeout=1000)
 
-            if has_auth and not is_reg_open:
+            if (has_auth or not agree_still_open):
                 log.info("Planet Sport Bet registration confirmed successfully!")
                 success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
                 return RegistrationResult(

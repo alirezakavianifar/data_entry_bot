@@ -10,6 +10,7 @@ from sites.bresbet import BresbetAdapter
 from sites.planetsportbet import PlanetSportBetAdapter
 from sites.starsports import StarSportsAdapter
 from sites.betgoodwin import BetgoodwinAdapter
+from sites.betstgeorge import BetStGeorgeAdapter
 from sites.affiliate_redirects import AffiliateRedirectAdapter
 from core.logger import get_logger
 
@@ -40,6 +41,8 @@ def get_site_adapters(filter_sites: Optional[List[str]] = None, enabled_only: bo
         "planetsportbet": PlanetSportBetAdapter,
         "starsports": StarSportsAdapter,
         "betgoodwin": BetgoodwinAdapter,
+        "betstgeorge": BetStGeorgeAdapter,
+        "bettinglounge1": BetStGeorgeAdapter,
     }
 
     for site_id, site_cfg in config.items():

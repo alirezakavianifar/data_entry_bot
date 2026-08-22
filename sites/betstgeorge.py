@@ -1,53 +1,45 @@
+from typing import Optional
 from playwright.sync_api import Page
 from sites.base import BaseSiteAdapter, extract_clean_error_message, is_already_registered_error
 from data.models import Client, RegistrationResult, RegistrationStatus
-from core.logger import get_logger, capture_failure_bundle, capture_success_screenshot
+from core.logger import get_logger, capture_failure_bundle, capture_success_screenshot, capture_login_proof_screenshot
 
 
-class StarSportsAdapter(BaseSiteAdapter):
-    """Adapter for Star Sports (https://www.starsports.bet/)."""
+class BetStGeorgeAdapter(BaseSiteAdapter):
+    """Adapter for Bet St George (https://betstgeorge.com/)."""
 
-    def __init__(self, promo_url: str = "https://starsports.bet/"):
+    def __init__(self, promo_url: str = "https://betstgeorge.com/?promo=B20G20afs&btag=6a8954687602ed96cd480d2c_699f0c4baa77fde72d25e55f&affiliateId=69c6b31e35700061a8907364"):
         super().__init__(
-            site_id="starsports",
-            site_name="Star Sports",
+            site_id="betstgeorge",
+            site_name="Bet St George",
             default_promo_url=promo_url,
             requires_uk_ip=False
         )
 
-
     def fill_registration(self, page: Page, client: Client, password: str) -> RegistrationResult:
         log = get_logger(client_id=client.client_id, site_id=self.site_id, step="fill_registration")
-        log.info(f"Starting Star Sports registration for {client.full_name}")
+        log.info(f"Starting Bet St George registration for {client.full_name}")
 
         try:
-            # 1. Direct navigation to clean signup URL or trigger modal
-            if "?account=signup" not in page.url:
-                try:
-                    page.goto("https://starsports.bet/?account=signup", wait_until="domcontentloaded", timeout=25000)
-                    page.wait_for_timeout(2000)
-                except Exception as ex:
-                    log.warning(f"Direct signup navigation warning: {ex}")
-
-            # Cookiebot Consent Handling
+            # 1. Cookiebot Consent Handling
             cookie_btn = page.locator('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll, #CybotCookiebotDialogBodyButtonAccept, button:has-text("Allow all"), button:has-text("Accept")').first
             if cookie_btn.is_visible(timeout=3000):
-                log.info("Accepting Cookiebot consent on Star Sports")
+                log.info("Accepting Cookiebot consent on Bet St George")
                 cookie_btn.click(force=True)
                 page.wait_for_timeout(1000)
 
-            # Check if sign up modal is open
-            email_inp = page.locator('input[data-test="email-input"]').first
+            # Check if sign up modal or landing form is open
+            email_inp = page.locator('input[data-test="landing-page-email-input"], input[data-test="email-input"], input[placeholder*="Email"]').first
             if not email_inp.is_visible(timeout=3000):
                 reg_btn = page.locator('a[data-test="account-navigation-signup-link"], a:has-text("Sign Up"), button:has-text("Sign Up")').first
                 if reg_btn.is_visible(timeout=3000):
-                    log.info("Clicking Sign Up CTA on Star Sports")
+                    log.info("Clicking Sign Up CTA on Bet St George")
                     reg_btn.click(force=True)
                     page.wait_for_timeout(2000)
 
             # 2. Step 1: Credentials
-            email_inp = page.locator('input[data-test="email-input"]').first
-            pwd_inp = page.locator('input[data-test="create-password-input"]').first
+            email_inp = page.locator('input[data-test="landing-page-email-input"], input[data-test="email-input"], input[placeholder*="Email"]').first
+            pwd_inp = page.locator('input[data-test="landing-page-password-input"], input[data-test="create-password-input"], input[placeholder*="password"]').first
 
             if not email_inp.is_visible(timeout=4000) or not pwd_inp.is_visible(timeout=4000):
                 bundle = capture_failure_bundle(page, client.client_id, self.site_id, "step1_inputs_missing")
@@ -68,7 +60,7 @@ class StarSportsAdapter(BaseSiteAdapter):
             pwd_inp.fill(password)
             page.wait_for_timeout(500)
 
-            create_acc_btn = page.locator('button[data-test="create-account-button"]').first
+            create_acc_btn = page.locator('button:has-text("Sign Up"), button:has-text("Join Here"), button[data-test="create-account-button"], button[type="submit"]:has-text("Sign Up")').first
             if create_acc_btn.is_visible(timeout=2000):
                 create_acc_btn.click(force=True)
                 page.wait_for_timeout(3000)
@@ -139,7 +131,7 @@ class StarSportsAdapter(BaseSiteAdapter):
             postcode_inp.fill(client.postcode)
             page.wait_for_timeout(500)
 
-            search_addr_btn = page.locator('button[data-test="sign-up-search-address-button"]').first
+            search_addr_btn = page.locator('button[data-test="sign-up-search-address-button"], button:has-text("Search")').first
             if search_addr_btn.is_visible(timeout=2000):
                 log.info(f"Searching address for postcode: {client.postcode}")
                 search_addr_btn.click(force=True)
@@ -188,7 +180,7 @@ class StarSportsAdapter(BaseSiteAdapter):
                 final_err_msg = clean_err or raw_err_text
 
                 if is_duplicate:
-                    log.warning(f"[DUPLICATE] Star Sports: Client {client.full_name} is ALREADY REGISTERED ({final_err_msg})")
+                    log.warning(f"[DUPLICATE] Bet St George: Client {client.full_name} is ALREADY REGISTERED ({final_err_msg})")
                     bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
                     return RegistrationResult(
                         client_id=client.client_id,
@@ -203,7 +195,7 @@ class StarSportsAdapter(BaseSiteAdapter):
                         dom_snapshot_path=bundle.dom_snapshot_path
                     )
                 else:
-                    log.warning(f"Star Sports registration rejected: {final_err_msg}")
+                    log.warning(f"Bet St George registration rejected: {final_err_msg}")
                     bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(final_err_msg))
                     return RegistrationResult(
                         client_id=client.client_id,
@@ -231,6 +223,7 @@ class StarSportsAdapter(BaseSiteAdapter):
                     next_btn.click(force=True)
                     page.wait_for_timeout(4000)
 
+            # Authenticated indicators / Deposit modal / KYC prompt
             auth_indicators = [
                 'a:has-text("Deposit")', 'button:has-text("Deposit")',
                 'a:has-text("My Account")', 'button:has-text("My Account")',
@@ -250,7 +243,7 @@ class StarSportsAdapter(BaseSiteAdapter):
             agree_still_open = page.locator('button[data-test="agree-and-join-button"]:visible').first.is_visible(timeout=1000)
 
             if (has_auth or not agree_still_open):
-                log.info("Star Sports registration confirmed successfully!")
+                log.info("Bet St George registration confirmed successfully!")
                 success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
                 return RegistrationResult(
                     client_id=client.client_id,
@@ -261,12 +254,12 @@ class StarSportsAdapter(BaseSiteAdapter):
                     email=client.email,
                     username=client.email,
                     password=password,
-                    account_reference="StarSports-Direct",
+                    account_reference="BetStGeorge-Direct",
                     screenshot_path=success_shot
                 )
             else:
                 bundle = capture_failure_bundle(page, client.client_id, self.site_id, "verify_submission")
-                log.warning("Star Sports submission could not be confirmed")
+                log.warning("Bet St George submission could not be confirmed")
                 return RegistrationResult(
                     client_id=client.client_id,
                     client_name=client.full_name,
@@ -280,7 +273,7 @@ class StarSportsAdapter(BaseSiteAdapter):
                 )
 
         except Exception as e:
-            log.error(f"Registration error on Star Sports: {e}")
+            log.error(f"Registration error on Bet St George: {e}")
             bundle = capture_failure_bundle(page, client.client_id, self.site_id, "registration_exception", e)
             return RegistrationResult(
                 client_id=client.client_id,
@@ -294,7 +287,6 @@ class StarSportsAdapter(BaseSiteAdapter):
                 screenshot_path=bundle.screenshot_path
             )
 
-
     def login(
         self,
         page: Page,
@@ -302,13 +294,13 @@ class StarSportsAdapter(BaseSiteAdapter):
         password: str,
         client_id: Optional[str] = None
     ) -> tuple[bool, Optional[str], Optional[str]]:
-        """Specialized login verification handler for Star Sports."""
+        """Specialized login verification handler for Bet St George."""
         cid = client_id or "client"
         log = get_logger(client_id=cid, site_id=self.site_id, step="login")
-        log.info(f"Navigating to Star Sports clean login URL: https://starsports.bet/?account=login")
+        log.info(f"Navigating to Bet St George clean login URL: https://betstgeorge.com/?account=login")
 
         try:
-            page.goto("https://starsports.bet/?account=login", wait_until="domcontentloaded", timeout=25000)
+            page.goto("https://betstgeorge.com/?account=login", wait_until="domcontentloaded", timeout=25000)
             page.wait_for_timeout(2000)
             self.accept_cookies(page)
 
@@ -327,14 +319,13 @@ class StarSportsAdapter(BaseSiteAdapter):
 
             if not email_inp.is_visible(timeout=4000) or not pwd_inp.is_visible(timeout=4000):
                 bundle = capture_failure_bundle(page, cid, self.site_id, "login_inputs_missing")
-                return False, bundle.screenshot_path, "Star Sports login inputs not visible"
+                return False, bundle.screenshot_path, "Bet St George login inputs not visible"
 
             log.info(f"Filling credentials for {username_or_email}")
             email_inp.fill(username_or_email)
             pwd_inp.fill(password)
             page.wait_for_timeout(500)
 
-            # Scope submit button to the login container
             modal = page.locator('div[data-component="Modal"], div[class*="login"], form').first
             submit_btn = modal.locator('button[type="submit"]:has-text("Login"), button:has-text("Login")').first
             if submit_btn.is_visible(timeout=2000):
@@ -345,10 +336,12 @@ class StarSportsAdapter(BaseSiteAdapter):
             page.wait_for_timeout(5000)
 
             # Check for error message
-            err_el = page.locator('div[class*="error"]:visible, .error-message:visible, div[role="alert"]:visible, :has-text("not verified"):visible, :has-text("Invalid"):visible').first
+            err_el = page.locator('div[data-test="error-message-content"]:visible, div[class*="error"]:visible, .error-message:visible, div[role="alert"]:visible, :has-text("not verified"):visible, :has-text("Invalid"):visible').first
             err_text = None
             if err_el.is_visible(timeout=1000):
                 err_text = err_el.inner_text().strip().replace("\n", " - ")
+
+            proof_path = capture_login_proof_screenshot(page, cid, self.site_id)
 
             auth_indicators = [
                 'a:has-text("Deposit")', 'button:has-text("Deposit")',
@@ -365,23 +358,17 @@ class StarSportsAdapter(BaseSiteAdapter):
                 except Exception:
                     continue
 
-            # Check if login modal/form is still visible
             is_login_open = page.locator('input[name="password"]:visible, input[type="password"]:visible').first.is_visible(timeout=1000)
 
-            from core.logger import capture_login_proof_screenshot
-            proof_path = capture_login_proof_screenshot(page, cid, self.site_id)
-
             if is_authenticated and not is_login_open and not err_text:
-                log.info(f"Star Sports login successfully verified! Proof: {proof_path}")
+                log.info(f"Bet St George login successfully verified! Proof: {proof_path}")
                 return True, proof_path, None
             else:
                 summary = err_text or "Login failed: Credentials rejected or session indicators not found"
-                log.warning(f"Star Sports login failed: {summary}")
+                log.warning(f"Bet St George login failed: {summary}")
                 return False, proof_path, summary
 
         except Exception as e:
-            log.error(f"Star Sports login error: {e}")
+            log.error(f"Bet St George login error: {e}")
             bundle = capture_failure_bundle(page, cid, self.site_id, "login_exception", e)
             return False, bundle.screenshot_path, str(e)
-
-
