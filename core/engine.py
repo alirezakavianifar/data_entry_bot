@@ -1,4 +1,5 @@
 import time
+import threading
 from typing import List, Optional, Tuple, Callable
 from config.settings import AUTO_VERIFY_LOGIN
 from data.base_provider import BaseDataProvider
@@ -21,12 +22,23 @@ class AutomationEngine:
         provider: BaseDataProvider,
         state_mgr: Optional[StateManager] = None,
         browser_mgr: Optional[BrowserManager] = None,
-        site_adapters: Optional[List[BaseSiteAdapter]] = None
+        site_adapters: Optional[List[BaseSiteAdapter]] = None,
+        stop_event: Optional[threading.Event] = None
     ):
         self.provider = provider
         self.state_mgr = state_mgr or StateManager()
         self.browser_mgr = browser_mgr or BrowserManager()
         self.site_adapters = site_adapters or get_site_adapters()
+        self.stop_event = stop_event or threading.Event()
+
+    def request_stop(self):
+        """Requests a graceful stop of the automation engine."""
+        logger.warning("Stop requested on AutomationEngine.")
+        self.stop_event.set()
+
+    def is_stop_requested(self) -> bool:
+        """Returns True if a stop has been requested."""
+        return self.stop_event.is_set()
 
     def run(
         self,
@@ -41,6 +53,10 @@ class AutomationEngine:
         """Executes the signup pipeline for eligible clients across target websites."""
         logger.info(f"Starting automation run (Limit: {limit}, Dry-Run: {dry_run}, Verify-Login: {verify_login}, Retry-Failed: {retry_failed})")
         
+        if self.is_stop_requested():
+            logger.warning("Stop requested before starting batch execution.")
+            return {"status": "stopped", "stats": {}, "state_summary": self.state_mgr.get_summary()}
+
         # 1. Fetch eligible clients
         clients = self.provider.get_valid_clients()
         logger.info(f"Retrieved {len(clients)} valid client records from data source")
@@ -70,11 +86,17 @@ class AutomationEngine:
         if dry_run:
             logger.info("=== DRY RUN MODE: Validating client data only ===")
             for idx, client in enumerate(selected_clients, start=1):
+                if self.is_stop_requested():
+                    logger.warning("Dry-run stopped by user request.")
+                    break
                 logger.info(
                     f"[{idx}/{len(selected_clients)}] Valid Client: {client.full_name} | "
                     f"Email: {client.email} | Phone: {client.phone} | Postcode: {client.postcode} | DOB: {client.dob_day}/{client.dob_month}/{client.dob_year}"
                 )
-            return {"status": "dry_run_complete", "clients_validated": len(selected_clients)}
+            return {
+                "status": "stopped" if self.is_stop_requested() else "dry_run_complete",
+                "clients_validated": len(selected_clients)
+            }
 
         # 4. Main Execution Loop
         stats = {"processed_clients": 0, "success_count": 0, "already_registered_count": 0, "failed_count": 0, "skipped_count": 0}
@@ -83,11 +105,19 @@ class AutomationEngine:
             self.browser_mgr.start()
 
             for client_idx, client in enumerate(selected_clients, start=1):
+                if self.is_stop_requested():
+                    logger.warning(f"Stop requested by user. Halting execution before Client [{client_idx}/{len(selected_clients)}].")
+                    break
+
                 logger.info(f"\n=======================================================")
                 logger.info(f"Processing Client [{client_idx}/{len(selected_clients)}]: {client.full_name} ({client.email})")
                 logger.info(f"=======================================================")
 
                 for site in active_adapters:
+                    if self.is_stop_requested():
+                        logger.warning(f"Stop requested by user. Skipping remaining sites for {client.full_name}.")
+                        break
+
                     # Check if already completed / already registered
                     if self.state_mgr.is_complete(client.client_id, site.site_id):
                         logger.info(f"Skipping {site.site_name} for {client.full_name} (Already Completed or Registered)")
@@ -129,49 +159,52 @@ class AutomationEngine:
 
                         # Post-Registration Login Verification (if desired & signup succeeded)
                         if result.status == RegistrationStatus.SUCCESS and verify_login:
-                            logger.info(f"🔐 Verifying account creation via login for {client.full_name} on {site.site_name}...")
-                            login_ctx = self.browser_mgr.new_context(trace_name=f"{client.client_id}_{site.site_id}_login")
-                            login_page = login_ctx.new_page()
-                            try:
-                                login_ok, login_proof, login_err = site.login(
-                                    page=login_page,
-                                    username_or_email=client.email,
-                                    password=password,
-                                    client_id=client.client_id
-                                )
-                                if login_ok and login_proof:
-                                    result.login_verified = True
-                                    result.login_screenshot_path = login_proof
-                                    result.screenshot_path = login_proof
-                                    logger.info(f"✅ Login verified with visual proof: {login_proof}")
-                                elif is_pending_verification_error(login_err or ""):
-                                    # Account was created successfully with valid credentials, but user email/KYC is pending
-                                    result.login_verified = False
-                                    result.login_screenshot_path = login_proof
-                                    result.screenshot_path = login_proof
-                                    result.error_summary = login_err
-                                    result.account_reference = f"{site.site_name} (Pending Activation)"
-                                    logger.info(f"ℹ️ Account created with valid credentials for {client.full_name}, but activation is pending ({login_err}). Preserving credentials.")
-                                    # Keep status as SUCCESS and DO NOT remove from spreadsheet
-                                else:
-                                    # Conclusive proof that registration was not successful / credentials rejected
+                            if self.is_stop_requested():
+                                logger.warning(f"Stop requested by user: skipping login verification for {client.full_name} on {site.site_name}.")
+                            else:
+                                logger.info(f"🔐 Verifying account creation via login for {client.full_name} on {site.site_name}...")
+                                login_ctx = self.browser_mgr.new_context(trace_name=f"{client.client_id}_{site.site_id}_login")
+                                login_page = login_ctx.new_page()
+                                try:
+                                    login_ok, login_proof, login_err = site.login(
+                                        page=login_page,
+                                        username_or_email=client.email,
+                                        password=password,
+                                        client_id=client.client_id
+                                    )
+                                    if login_ok and login_proof:
+                                        result.login_verified = True
+                                        result.login_screenshot_path = login_proof
+                                        result.screenshot_path = login_proof
+                                        logger.info(f"✅ Login verified with visual proof: {login_proof}")
+                                    elif is_pending_verification_error(login_err or ""):
+                                        # Account was created successfully with valid credentials, but user email/KYC is pending
+                                        result.login_verified = False
+                                        result.login_screenshot_path = login_proof
+                                        result.screenshot_path = login_proof
+                                        result.error_summary = login_err
+                                        result.account_reference = f"{site.site_name} (Pending Activation)"
+                                        logger.info(f"ℹ️ Account created with valid credentials for {client.full_name}, but activation is pending ({login_err}). Preserving credentials.")
+                                        # Keep status as SUCCESS and DO NOT remove from spreadsheet
+                                    else:
+                                        # Conclusive proof that registration was not successful / credentials rejected
+                                        result.status = RegistrationStatus.FAILED
+                                        result.login_verified = False
+                                        result.login_error = login_err
+                                        result.error_summary = f"Login verification failed: {login_err or 'Invalid credentials'}"
+                                        logger.warning(f"❌ Login verification rejected ({login_err}). Registration marked as FAILED.")
+                                        self.provider.remove_success(client_name=client.full_name, site_name=site.site_name, email=client.email)
+                                except Exception as le:
+                                    logger.error(f"Error during login verification step: {le}")
                                     result.status = RegistrationStatus.FAILED
                                     result.login_verified = False
-                                    result.login_error = login_err
-                                    result.error_summary = f"Login verification failed: {login_err or 'Invalid credentials'}"
-                                    logger.warning(f"❌ Login verification rejected ({login_err}). Registration marked as FAILED.")
+                                    result.error_summary = f"Login verification error: {le}"
                                     self.provider.remove_success(client_name=client.full_name, site_name=site.site_name, email=client.email)
-                            except Exception as le:
-                                logger.error(f"Error during login verification step: {le}")
-                                result.status = RegistrationStatus.FAILED
-                                result.login_verified = False
-                                result.error_summary = f"Login verification error: {le}"
-                                self.provider.remove_success(client_name=client.full_name, site_name=site.site_name, email=client.email)
-                            finally:
-                                try:
-                                    login_ctx.close()
-                                except Exception:
-                                    pass
+                                finally:
+                                    try:
+                                        login_ctx.close()
+                                    except Exception:
+                                        pass
 
                         # Record in persistent state
                         self.state_mgr.record_result(result)
@@ -199,16 +232,21 @@ class AutomationEngine:
 
                 stats["processed_clients"] += 1
 
-
         finally:
+            if self.is_stop_requested():
+                self.state_mgr.reset_in_progress()
             self.browser_mgr.close()
 
         summary = self.state_mgr.get_summary()
         logger.info("\n=======================================================")
-        logger.info(f"Batch Execution Finished. Summary: {summary}")
+        logger.info(f"Batch Execution {'Stopped Early by User' if self.is_stop_requested() else 'Finished'}. Summary: {summary}")
         logger.info(f"Run Stats: {stats}")
         logger.info(f"=======================================================")
-        return {"stats": stats, "state_summary": summary}
+        return {
+            "status": "stopped" if self.is_stop_requested() else "completed",
+            "stats": stats,
+            "state_summary": summary
+        }
 
 
 def verify_single_account(

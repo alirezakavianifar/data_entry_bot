@@ -245,6 +245,37 @@ class StateManager:
         finally:
             conn.close()
 
+    def reset_in_progress(self, client_id: Optional[str] = None, site_id: Optional[str] = None) -> int:
+        """Resets IN_PROGRESS records back to PENDING (by removing the in-progress row) so they can be re-run cleanly."""
+        conn = self._get_connection()
+        try:
+            if client_id and site_id:
+                cur = conn.execute(
+                    "DELETE FROM client_site_status WHERE status = 'IN_PROGRESS' AND client_id = ? AND site_id = ?",
+                    (client_id, site_id)
+                )
+            elif client_id:
+                cur = conn.execute(
+                    "DELETE FROM client_site_status WHERE status = 'IN_PROGRESS' AND client_id = ?",
+                    (client_id,)
+                )
+            elif site_id:
+                cur = conn.execute(
+                    "DELETE FROM client_site_status WHERE status = 'IN_PROGRESS' AND site_id = ?",
+                    (site_id,)
+                )
+            else:
+                cur = conn.execute(
+                    "DELETE FROM client_site_status WHERE status = 'IN_PROGRESS'"
+                )
+            deleted = cur.rowcount
+            conn.commit()
+            if deleted > 0:
+                logger.info(f"Reset {deleted} IN_PROGRESS record(s) back to pending.")
+            return deleted
+        finally:
+            conn.close()
+
     def reset_all_failed(self) -> int:
         """Resets all FAILED and MANUAL_REVIEW records so they can be re-run."""
         conn = self._get_connection()

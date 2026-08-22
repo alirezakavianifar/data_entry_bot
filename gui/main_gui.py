@@ -70,17 +70,22 @@ class DataEntryBotGUI(ctk.CTk):
         # State & Threading
         self.log_queue = queue.Queue()
         self.worker_thread: Optional[threading.Thread] = None
+        self.stop_event = threading.Event()
+        self.current_engine: Optional[AutomationEngine] = None
         self.is_running = False
         self.stop_requested = False
         self.promo_field_entries: Dict[str, dict] = {}
 
         # Register Loguru GUI sink
         self.gui_sink = GuiLogSink(self.log_queue)
-        logger.add(
+        self.gui_sink_id = logger.add(
             self.gui_sink.write,
             level="INFO",
             format="{time:HH:mm:ss} | {level: <7} | {message}\n"
         )
+
+        # Handle window closing gracefully
+        self.protocol("WM_DELETE_WINDOW", self._on_window_closing)
 
         # Build UI
         self._create_layout()
@@ -970,14 +975,25 @@ class DataEntryBotGUI(ctk.CTk):
 
     def _poll_log_queue(self):
         """Drains the log queue and appends entries to the textbox."""
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+
         while not self.log_queue.empty():
             try:
                 msg = self.log_queue.get_nowait()
                 self.log_textbox.insert("end", msg)
                 self.log_textbox.see("end")
-            except queue.Empty:
+            except Exception:
                 break
-        self.after(100, self._poll_log_queue)
+
+        try:
+            if self.winfo_exists():
+                self.after(100, self._poll_log_queue)
+        except Exception:
+            pass
 
     def _start_automation(self):
         self._run_task(dry_run=False)
@@ -1004,6 +1020,8 @@ class DataEntryBotGUI(ctk.CTk):
         retry_failed = self.retry_failed_var.get()
 
         self.is_running = True
+        self.stop_requested = False
+        self.stop_event.clear()
         self.btn_start.configure(state="disabled")
         self.btn_dry_run.configure(state="disabled")
         self.btn_stop.configure(state="normal")
@@ -1025,8 +1043,10 @@ class DataEntryBotGUI(ctk.CTk):
                     provider=provider,
                     state_mgr=state_mgr,
                     browser_mgr=browser_mgr,
-                    site_adapters=adapters
+                    site_adapters=adapters,
+                    stop_event=self.stop_event
                 )
+                self.current_engine = engine
 
                 engine.run(
                     limit=limit,
@@ -1042,11 +1062,11 @@ class DataEntryBotGUI(ctk.CTk):
                 logger.error(f"Error in automation engine: {e}")
             finally:
                 self.is_running = False
+                self.current_engine = None
                 try:
                     self.after(0, self._on_task_finished)
                 except Exception:
                     pass
-
 
         self.worker_thread = threading.Thread(target=worker, daemon=True)
         self.worker_thread.start()
@@ -1056,17 +1076,49 @@ class DataEntryBotGUI(ctk.CTk):
         self._update_stats_display()
 
     def _stop_automation(self):
+        if not self.is_running:
+            return
+        self.stop_requested = True
+        self.stop_event.set()
+        if self.current_engine:
+            self.current_engine.request_stop()
         self.status_badge.configure(text="● STOPPING...", text_color="#ef5350")
-        logger.warning("Stop requested by user. Cleaning up after current step...")
+        logger.warning("Stop requested by user. Terminating process cleanly after current step...")
         self.btn_stop.configure(state="disabled")
 
     def _on_task_finished(self):
+        self.is_running = False
         self.btn_start.configure(state="normal")
         self.btn_dry_run.configure(state="normal")
         self.btn_stop.configure(state="disabled")
-        self.status_badge.configure(text="● COMPLETED", text_color="#81c784")
-        self.progress_bar.set(1.0)
+        if self.stop_requested:
+            self.status_badge.configure(text="● STOPPED", text_color="#ef5350")
+            logger.info("Automation stopped by user.")
+        else:
+            self.status_badge.configure(text="● COMPLETED", text_color="#81c784")
+            self.progress_bar.set(1.0)
+        self.stop_requested = False
         self._update_stats_display()
+
+    def _on_window_closing(self):
+        """Cleanly shuts down worker threads and browsers when closing the application."""
+        if self.is_running:
+            self.stop_requested = True
+            self.stop_event.set()
+            if self.current_engine:
+                try:
+                    self.current_engine.request_stop()
+                except Exception:
+                    pass
+        self.destroy()
+
+    def destroy(self):
+        try:
+            if hasattr(self, "gui_sink_id"):
+                logger.remove(self.gui_sink_id)
+        except Exception:
+            pass
+        super().destroy()
 
     def _populate_promo_links_tab(self):
         """Populates the Promo Links & Sites settings tab with interactive editable cards."""
