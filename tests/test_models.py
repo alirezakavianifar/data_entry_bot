@@ -84,3 +84,20 @@ def test_client_validation():
     )
     is_valid, reason = invalid_c.is_valid_for_signup
     assert is_valid is False
+
+
+def test_client_town_city_and_address_sanitization():
+    c = Client(
+        client_id="CLI_006",
+        full_name="Gary Oldman",
+        first_name="Gary",
+        last_name="Oldman",
+        dob=datetime.date(1989, 11, 23),
+        email="gary@example.com",
+        phone="07700900888",
+        address_line1="45 Victoria Road, ",
+        town_city="Nottingham, Nottinghamshire: East",
+        postcode="NG3 7HE"
+    )
+    assert c.town_city == "Nottingham"
+    assert c.address_line1 == "45 Victoria Road"

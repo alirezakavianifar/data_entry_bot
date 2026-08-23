@@ -1,3 +1,5 @@
+import re
+from typing import Optional
 from playwright.sync_api import Page
 from sites.base import BaseSiteAdapter, extract_clean_error_message, is_already_registered_error
 from data.models import Client, RegistrationResult, RegistrationStatus
@@ -29,11 +31,28 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                 page.wait_for_timeout(1000)
 
             # 2. Click JOIN / Claim Offer CTA
-            join_btn = page.locator('text=JOIN, button:has-text("JOIN"), a:has-text("JOIN"), button:has-text("Join"), a:has-text("Claim")').first
-            if join_btn.is_visible(timeout=4000):
-                log.info("Clicking Betgoodwin JOIN CTA")
+            join_btn = page.locator('text=JOIN, button:has-text("JOIN"), a:has-text("JOIN"), button:has-text("Join"), a:has-text("Claim"), div.ItemRegister').first
+            if join_btn.is_visible(timeout=2000):
+                log.info("Clicking Betgoodwin JOIN CTA via locator")
                 join_btn.click(force=True)
-                page.wait_for_timeout(2500)
+            else:
+                log.info("Clicking Betgoodwin JOIN CTA via deep JS evaluation")
+                page.evaluate("""() => {
+                    let target = null;
+                    const scan = (node) => {
+                        if (target) return;
+                        const txt = (node.innerText || '').trim();
+                        if ((node.tagName === 'BUTTON' || node.tagName === 'A' || node.tagName === 'DIV') && (txt === 'JOIN' || txt === 'Join' || txt === 'JOIN NOW')) {
+                            target = node;
+                            return;
+                        }
+                        if (node.shadowRoot) Array.from(node.shadowRoot.children).forEach(scan);
+                        if (node.children) Array.from(node.children).forEach(scan);
+                    };
+                    scan(document.body);
+                    if (target) target.click();
+                }""")
+            page.wait_for_timeout(3000)
 
             # 3. Fill Registration Form
             # Title Selection
@@ -113,7 +132,11 @@ class BetgoodwinAdapter(BaseSiteAdapter):
 
             city_inp = page.locator('input[name="City"], input[placeholder*="Town"]').first
             if city_inp.is_visible(timeout=2000):
-                city_inp.fill(client.town_city)
+                # Ensure no special characters, commas, numbers or colons
+                clean_c = re.split(r"[,/:\n]", str(client.town_city))[0].strip()
+                clean_c = re.sub(r"[^a-zA-Z\s\-']", "", clean_c).strip()
+                clean_c = re.sub(r"\s+", " ", clean_c) or "London"
+                city_inp.fill(clean_c)
 
             # Affiliate / Promo Code
             btag_inp = page.locator('input[name="Btag"]').first
@@ -135,25 +158,13 @@ class BetgoodwinAdapter(BaseSiteAdapter):
             }""")
             page.wait_for_timeout(1000)
 
-            # 4. Submit Registration via 'Done' Button
-            done_btn = page.locator('button:has-text("Done"), button[type="submit"]:has-text("Done")').first
-            if done_btn.is_visible(timeout=3000):
-                log.info("Submitting Betgoodwin registration via 'Done'")
-                done_btn.scroll_into_view_if_needed()
-                page.wait_for_timeout(500)
-                done_btn.click(force=True)
-                page.wait_for_timeout(7000)
-
-            # 5. Capture Proof & Return Result
-            # Check for error banners first
-            error_modal = page.locator('div[class*="error"]:visible, div[role="alert"]:visible, .error-message:visible, [class*="alert"]:visible').first
-            if error_modal.is_visible(timeout=2000):
-                raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
-                clean_err = extract_clean_error_message(raw_err_text)
-                is_duplicate = is_already_registered_error(raw_err_text)
-
-                if is_duplicate:
-                    log.warning(f"⚠️ Betgoodwin: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
+            # 4. Check for Inline Field Errors / Submit Registration via 'Done' Button
+            inline_error = page.locator('[class*="error"]:visible, [class*="invalid"]:visible, div:has-text("No addresses found"):visible, span:has-text("No addresses found"):visible, p:has-text("No addresses found"):visible, div:has-text("No address found"):visible').first
+            if inline_error.is_visible(timeout=1500):
+                raw_err = inline_error.inner_text().strip().replace("\n", " - ")
+                clean_err = extract_clean_error_message(raw_err) or raw_err
+                if is_already_registered_error(raw_err):
+                    log.warning(f"Betgoodwin: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
                     bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
                     return RegistrationResult(
                         client_id=client.client_id,
@@ -163,6 +174,112 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                         status=RegistrationStatus.ALREADY_REGISTERED,
                         email=client.email,
                         password=password,
+                        account_reference="Betgoodwin-Existing",
+                        error_summary=f"Already registered: {clean_err}",
+                        screenshot_path=bundle.screenshot_path,
+                        dom_snapshot_path=bundle.dom_snapshot_path
+                    )
+                else:
+                    log.warning(f"Betgoodwin registration rejected due to inline field error: {clean_err}")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "field_validation_error", Exception(clean_err))
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.FAILED,
+                        email=client.email,
+                        password=password,
+                        error_summary=clean_err,
+                        screenshot_path=bundle.screenshot_path,
+                        dom_snapshot_path=bundle.dom_snapshot_path
+                    )
+
+            done_btn = page.locator('button:has-text("Done"), button[type="submit"]:has-text("Done")').first
+            if done_btn.is_visible(timeout=3000):
+                log.info("Submitting Betgoodwin registration via 'Done'")
+                done_btn.scroll_into_view_if_needed()
+                page.wait_for_timeout(500)
+                done_btn.click(force=True)
+
+                # Wait dynamically while 'Please wait, loading...' or spinner is active (up to 45 seconds)
+                log.info("Waiting for Betgoodwin server processing / 'Please wait, loading...' to complete...")
+                loading_loc = page.locator('text="Please wait, loading...", text="Please wait", text="loading...", [class*="loading"]:visible, [class*="spinner"]:visible')
+                for _ in range(45):
+                    page.wait_for_timeout(1000)
+                    is_loading = False
+                    try:
+                        is_loading = loading_loc.first.is_visible(timeout=500)
+                    except Exception:
+                        pass
+
+                    if not is_loading:
+                        # Check if a definitive next state is ready (marketing modal, deposit, auth, or error)
+                        try:
+                            if page.locator('text="DON\'T MISS OUT!", vaadin-checkbox:has-text("Sports"), div[class*="error"]:visible, [role="alert"]:visible, [class*="toast"]:visible, :has-text("issue with your account registration"):visible, text="Deposit", text="My Account"').first.is_visible(timeout=500):
+                                break
+                        except Exception:
+                            pass
+
+            # 5. Handle Marketing Preferences Screen (if presented)
+            marketing_screen = page.locator('text="DON\'T MISS OUT!", vaadin-checkbox:has-text("Sports"), label:has-text("Sports")').first
+            if marketing_screen.is_visible(timeout=3000):
+                log.info("Betgoodwin: Handling Step 2 Marketing Preferences...")
+                sports_cb = page.locator('vaadin-checkbox:has-text("Sports"), label:has-text("Sports"), vaadin-checkbox:has-text("Casino")').first
+                if sports_cb.is_visible(timeout=2000):
+                    sports_cb.click(force=True)
+                    page.wait_for_timeout(500)
+
+                # Scroll modal to ensure Done button is in view
+                page.evaluate("""() => {
+                    const scrollables = Array.from(document.querySelectorAll('div, form')).filter(el => el.scrollHeight > el.clientHeight);
+                    scrollables.forEach(s => s.scrollTop = s.scrollHeight);
+                }""")
+                page.wait_for_timeout(300)
+
+                done2_btn = page.locator('button:has-text("Done"):visible, button.registration__button--next:visible').first
+                if done2_btn.is_visible(timeout=2000):
+                    done2_btn.click(force=True)
+                    log.info("Waiting for Step 2 completion / 'Please wait, loading...'...")
+                    loading_loc = page.locator('text="Please wait, loading...", text="Please wait", text="loading...", [class*="loading"]:visible, [class*="spinner"]:visible')
+                    for _ in range(30):
+                        page.wait_for_timeout(1000)
+                        is_loading = False
+                        try:
+                            is_loading = loading_loc.first.is_visible(timeout=500)
+                        except Exception:
+                            pass
+                        if not is_loading:
+                            try:
+                                if page.locator('text="Deposit", text="My Account", div[class*="error"]:visible, [class*="toast"]:visible, :has-text("issue with your account registration"):visible').first.is_visible(timeout=500):
+                                    break
+                            except Exception:
+                                pass
+
+                # Dismiss modal via close button or Escape if still visible
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(1000)
+
+            # 6. Capture Proof & Return Result
+            # Check for error banners / modals / toasts / validation alerts first
+            error_modal = page.locator('div[class*="error"]:visible, div[role="alert"]:visible, .error-message:visible, [class*="alert"]:visible, [class*="toast"]:visible, div:has-text("issue with your account registration"):visible, div:has-text("contact Customer Services"):visible, :has-text("No addresses found"):visible, :has-text("No address found"):visible').first
+            if error_modal.is_visible(timeout=2000):
+                raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
+                clean_err = extract_clean_error_message(raw_err_text)
+                is_duplicate = is_already_registered_error(raw_err_text)
+
+                if is_duplicate:
+                    log.warning(f"Betgoodwin: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.ALREADY_REGISTERED,
+                        email=client.email,
+                        password=password,
+                        account_reference="Betgoodwin-Existing",
                         error_summary=f"Already registered: {clean_err}",
                         screenshot_path=bundle.screenshot_path,
                         dom_snapshot_path=bundle.dom_snapshot_path
@@ -182,6 +299,35 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                         screenshot_path=bundle.screenshot_path,
                         dom_snapshot_path=bundle.dom_snapshot_path
                     )
+
+            # Page body duplicate check (exclude static header link 'Already have an account? Login')
+            body_txt = ""
+            try:
+                raw_txt = page.locator("body").inner_text()
+                if isinstance(raw_txt, str):
+                    body_txt = raw_txt
+            except Exception:
+                pass
+
+            clean_err = extract_clean_error_message(body_txt)
+            is_static_link = "already have an account? login" in clean_err.lower() or clean_err.strip() == "Already have an account? Login"
+
+            if not is_static_link and body_txt and (is_already_registered_error(body_txt) or any(k in body_txt.lower() for k in ("self-exclusion", "account with this email already exists", "email already exists", "email address is already", "username already exists"))):
+                log.warning(f"Betgoodwin: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
+                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                return RegistrationResult(
+                    client_id=client.client_id,
+                    client_name=client.full_name,
+                    site_id=self.site_id,
+                    site_name=self.site_name,
+                    status=RegistrationStatus.ALREADY_REGISTERED,
+                    email=client.email,
+                    password=password,
+                    account_reference="Betgoodwin-Existing",
+                    error_summary=f"Already registered: {clean_err or 'Account already exists'}",
+                    screenshot_path=bundle.screenshot_path,
+                    dom_snapshot_path=bundle.dom_snapshot_path
+                )
 
             # Authenticated indicators / Deposit modal
             auth_indicators = [
@@ -263,11 +409,28 @@ class BetgoodwinAdapter(BaseSiteAdapter):
             self.accept_cookies(page)
 
             # Locate and click Log In CTA
-            login_btn = page.locator('button:has-text("Log In"), a:has-text("Log In"), button:has-text("Login"), a:has-text("Login")').first
+            login_btn = page.locator('button:has-text("LOG IN"), button:has-text("Log In"), a:has-text("LOG IN"), a:has-text("Log In"), .SignInButton').first
             if login_btn.is_visible(timeout=3000):
                 log.info("Clicking Log In on Betgoodwin")
                 login_btn.click(force=True)
-                page.wait_for_timeout(1500)
+            else:
+                log.info("Clicking Betgoodwin Log In CTA via deep JS evaluation")
+                page.evaluate("""() => {
+                    let target = null;
+                    const scan = (node) => {
+                        if (target) return;
+                        const txt = (node.innerText || '').trim();
+                        if ((node.tagName === 'BUTTON' || node.tagName === 'A' || node.tagName === 'DIV') && (txt === 'LOG IN' || txt === 'Log In')) {
+                            target = node;
+                            return;
+                        }
+                        if (node.shadowRoot) Array.from(node.shadowRoot.children).forEach(scan);
+                        if (node.children) Array.from(node.children).forEach(scan);
+                    };
+                    scan(document.body);
+                    if (target) target.click();
+                }""")
+            page.wait_for_timeout(2000)
 
             user_inp = page.locator('input[name*="user" i], input[name*="email" i], input[type="email"], input[id*="user" i], input[id*="email" i]').first
             pwd_inp = page.locator('input[name*="password" i], input[type="password"], input[id*="password" i]').first
@@ -281,14 +444,15 @@ class BetgoodwinAdapter(BaseSiteAdapter):
             pwd_inp.fill(password)
             page.wait_for_timeout(500)
 
-            modal = page.locator('div[class*="modal"], div[class*="login"], form').first
-            submit_btn = modal.locator('button[type="submit"]:has-text("Log In"), button:has-text("Log In"), button[type="submit"]').first
+            # Submit login form
+            submit_btn = page.locator('button:has-text("LOG IN"):visible, button:has-text("Log In"):visible, button[type="submit"]:visible').last
             if submit_btn.is_visible(timeout=2000):
+                log.info("Clicking modal LOG IN submit button")
                 submit_btn.click(force=True)
             else:
                 pwd_inp.press("Enter")
 
-            page.wait_for_timeout(5000)
+            page.wait_for_timeout(6000)
 
             # Check for error messages
             err_el = page.locator('div[class*="error"]:visible, .error-message:visible, div[role="alert"]:visible, :has-text("not verified"):visible, :has-text("Invalid"):visible').first

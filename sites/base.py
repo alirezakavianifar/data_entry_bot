@@ -10,28 +10,47 @@ from core.logger import get_logger, capture_failure_bundle, capture_login_proof_
 ALREADY_REGISTERED_PATTERNS = [
     r"looks like you['’]re already registered",
     r"already registered",
-    r"account with this email (?:already )?exists",
+    r"account with this e-?mail (?:already )?exists",
     r"account (?:already )?exists",
-    r"email (?:address )?is already (?:registered|in use)",
+    r"(?:this )?e-?mail (?:already )?exists",
+    r"e-?mail (?:address )?(?:is )?already (?:registered|in use|exists|taken)",
     r"user(?:name)? already exists",
     r"duplicate account",
     r"already have an account",
-    r"already opened an account on our operating license"
+    r"you (?:may )?(?:already )?have an account",
+    r"(?:it )?looks like you (?:already )?have an account",
+    r"account set up with this e-?mail",
+    r"recovering your account",
+    r"self-exclusion",
+    r"unable to register due to an active self-exclusion",
+    r"already opened an account on our operating license",
+    r"there['’]s an issue with your account registration",
+    r"issue with your account registration"
 ]
 
 def extract_clean_error_message(text: str) -> str:
     """Extracts a succinct, human-readable error message from raw modal/page text."""
-    if not text:
+    if not text or not isinstance(text, str):
         return ""
     # Check for known explicit error sentences
     for pat in [
         r"(looks like you['’]re already registered[^\.\n]*[\.\n]?)",
+        r"((?:it )?looks like you already have an account[^\.\n]*[\.\n]?)",
+        r"(You['’]re unable to register due to an active Self-Exclusion[^\.\n]*[\.\n]?)",
+        r"(There['’]s an issue with your account registration[^\.\n]*[\.\n]?)",
         r"(an? account with this [^\.\n]+ already exists)",
-        r"(email (?:address )?is already (?:registered|in use)[^\.\n]*)",
+        r"(an? account set up with this [^\.\n]+)",
+        r"((?:this )?e-?mail (?:already )?exists[^\.\n]*)",
+        r"(e-?mail (?:address )?(?:is )?already (?:registered|in use|exists|taken)[^\.\n]*)",
         r"(user(?:name)? already exists[^\.\n]*)",
         r"(already registered[^\.\n]*)",
         r"(already opened an account on our operating license[^\.\n]*)",
         r"(Thank you for attempting to open an account with us[^\.\n]*\.[^\.\n]*\.)",
+        r"(No addresses? found for this (?:postal code|postcode)[^\.\n]*)",
+        r"(No addresses? found[^\.\n]*)",
+        r"(Invalid (?:postal code|postcode)[^\.\n]*)",
+        r"([^\.\n]*should not contain special characters[^\.\n]*)",
+        r"(Something went wrong[^\.\n]*)",
         r"(invalid credentials[^\.\n]*)",
         r"(unable to (?:register|process)[^\.\n]*)",
         r"(please (?:check|correct) the following errors?:?[^\.\n]*)",
@@ -58,7 +77,7 @@ def extract_clean_error_message(text: str) -> str:
 
 def is_already_registered_error(text: str) -> bool:
     """Returns True if the error message indicates the client account already exists."""
-    if not text:
+    if not text or not isinstance(text, str):
         return False
     for pat in ALREADY_REGISTERED_PATTERNS:
         if re.search(pat, text, re.IGNORECASE):

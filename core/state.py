@@ -1,7 +1,7 @@
 import sqlite3
 import datetime
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 from data.models import RegistrationStatus, RegistrationResult
 from config.settings import STATE_DB_PATH
 from core.logger import get_logger
@@ -244,6 +244,23 @@ class StateManager:
             conn.commit()
         finally:
             conn.close()
+
+    def reset_records(self, pairs: List[Tuple[str, str]]) -> int:
+        """Resets multiple client-site records back to PENDING in a single transaction."""
+        if not pairs:
+            return 0
+        conn = self._get_connection()
+        try:
+            cur = conn.executemany(
+                "DELETE FROM client_site_status WHERE client_id = ? AND site_id = ?",
+                pairs
+            )
+            deleted = cur.rowcount
+            conn.commit()
+            return deleted
+        finally:
+            conn.close()
+
 
     def reset_in_progress(self, client_id: Optional[str] = None, site_id: Optional[str] = None) -> int:
         """Resets IN_PROGRESS records back to PENDING (by removing the in-progress row) so they can be re-run cleanly."""

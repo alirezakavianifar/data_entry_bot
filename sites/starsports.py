@@ -74,10 +74,25 @@ class StarSportsAdapter(BaseSiteAdapter):
                 page.wait_for_timeout(3000)
 
             # Check for Step 1 validation errors
-            step1_err = page.locator('div[class*="error"], span[class*="error"], p[class*="error"]').first
-            if step1_err.is_visible(timeout=1000):
+            step1_err = page.locator('div[class*="error"], span[class*="error"], p[class*="error"], [data-test*="error"], [class*="errorMessage"], [class*="error"]').first
+            if step1_err.is_visible(timeout=1500):
                 err_txt = step1_err.inner_text().strip()
-                if any(kw in err_txt.lower() for kw in ["already exists", "invalid", "in use", "taken"]):
+                if is_already_registered_error(err_txt) or any(kw in err_txt.lower() for kw in ["already exists", "in use", "already registered", "taken"]):
+                    log.warning(f"[DUPLICATE] Star Sports: Client {client.full_name} is ALREADY REGISTERED ({err_txt})")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.ALREADY_REGISTERED,
+                        email=client.email,
+                        password=password,
+                        error_summary=f"Already registered: {err_txt}",
+                        screenshot_path=bundle.screenshot_path,
+                        dom_snapshot_path=bundle.dom_snapshot_path
+                    )
+                elif any(kw in err_txt.lower() for kw in ["invalid", "error", "required"]):
                     log.warning(f"Step 1 validation error: {err_txt}")
                     bundle = capture_failure_bundle(page, client.client_id, self.site_id, "step1_error", Exception(err_txt))
                     return RegistrationResult(

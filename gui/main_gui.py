@@ -4,7 +4,7 @@ import queue
 import threading
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from loguru import logger
@@ -75,6 +75,7 @@ class DataEntryBotGUI(ctk.CTk):
         self.is_running = False
         self.stop_requested = False
         self.promo_field_entries: Dict[str, dict] = {}
+        self.failure_checkbox_vars: Dict[Tuple[str, str], Tuple[ctk.BooleanVar, dict]] = {}
 
         # Register Loguru GUI sink
         self.gui_sink = GuiLogSink(self.log_queue)
@@ -199,16 +200,6 @@ class DataEntryBotGUI(ctk.CTk):
         )
         self.auto_verify_switch.grid(row=12, column=0, padx=20, pady=(0, 10), sticky="w")
 
-        # Retry Previously Failed Switch
-        self.retry_failed_var = ctk.BooleanVar(value=False)
-        self.retry_failed_switch = ctk.CTkSwitch(
-            self.sidebar,
-            text="🔁 Retry Failed Records",
-            variable=self.retry_failed_var,
-            font=ctk.CTkFont(size=12)
-        )
-        self.retry_failed_switch.grid(row=13, column=0, padx=20, pady=(0, 10), sticky="w")
-
         # Open Artifacts Button
         self.open_logs_btn = ctk.CTkButton(
             self.sidebar,
@@ -217,7 +208,7 @@ class DataEntryBotGUI(ctk.CTk):
             hover_color="#3b3b3b",
             command=self._open_artifacts_folder
         )
-        self.open_logs_btn.grid(row=14, column=0, padx=20, pady=15, sticky="ew")
+        self.open_logs_btn.grid(row=13, column=0, padx=20, pady=15, sticky="ew")
 
 
         # ==========================================
@@ -407,14 +398,94 @@ class DataEntryBotGUI(ctk.CTk):
 
         self.fail_header = ctk.CTkFrame(self.tab_failures, fg_color="transparent")
         self.fail_header.grid(row=0, column=0, sticky="ew", padx=10, pady=(5, 5))
-        self.fail_title = ctk.CTkLabel(self.fail_header, text="Registration Exceptions & Diagnostic Bundles", font=ctk.CTkFont(weight="bold"))
+
+        # Top row of failure header
+        self.fail_top_frame = ctk.CTkFrame(self.fail_header, fg_color="transparent")
+        self.fail_top_frame.pack(fill="x", pady=(0, 4))
+
+        self.fail_title = ctk.CTkLabel(self.fail_top_frame, text="Registration Exceptions & Diagnostic Bundles", font=ctk.CTkFont(weight="bold"))
         self.fail_title.pack(side="left")
-        self.fail_count_label = ctk.CTkLabel(self.fail_header, text="Total: 0 failures", font=ctk.CTkFont(weight="bold"))
+
+        self.fail_count_label = ctk.CTkLabel(self.fail_top_frame, text="Total: 0 failures", font=ctk.CTkFont(weight="bold"))
         self.fail_count_label.pack(side="right", padx=(10, 0))
-        self.btn_clear_fails = ctk.CTkButton(self.fail_header, text="🧹 Clear All Failures", width=120, height=24, fg_color="#444", hover_color="#555", command=self._clear_all_failures_action)
+
+        self.btn_clear_fails = ctk.CTkButton(self.fail_top_frame, text="🧹 Clear All Failures", width=120, height=24, fg_color="#444", hover_color="#555", command=self._clear_all_failures_action)
         self.btn_clear_fails.pack(side="right", padx=(5, 0))
-        self.btn_refresh_fails = ctk.CTkButton(self.fail_header, text="🔄 Refresh", width=80, height=24, command=self._populate_failures)
+
+        self.btn_refresh_fails = ctk.CTkButton(self.fail_top_frame, text="🔄 Refresh", width=80, height=24, command=self._populate_failures)
         self.btn_refresh_fails.pack(side="right")
+
+        # Batch Selection & Actions Toolbar Row
+        self.fail_toolbar_frame = ctk.CTkFrame(self.fail_header, fg_color="#252525", corner_radius=6)
+        self.fail_toolbar_frame.pack(fill="x", pady=(2, 0))
+
+        self.select_all_fails_var = ctk.BooleanVar(value=False)
+        self.select_all_fails_chk = ctk.CTkCheckBox(
+            self.fail_toolbar_frame,
+            text="Select All",
+            variable=self.select_all_fails_var,
+            command=self._toggle_select_all_failures,
+            width=80,
+            height=20,
+            checkbox_width=18,
+            checkbox_height=18
+        )
+        self.select_all_fails_chk.pack(side="left", padx=(10, 6), pady=5)
+
+        self.fail_selected_label = ctk.CTkLabel(
+            self.fail_toolbar_frame,
+            text="(0 selected)",
+            font=ctk.CTkFont(size=12),
+            text_color="#9e9e9e"
+        )
+        self.fail_selected_label.pack(side="left", padx=(0, 10), pady=5)
+
+        self.fail_search_var = ctk.StringVar()
+        self.fail_search_var.trace_add("write", lambda *_: self._populate_failures())
+        self.fail_search_entry = ctk.CTkEntry(
+            self.fail_toolbar_frame,
+            textvariable=self.fail_search_var,
+            placeholder_text="🔍 Search site, client, or error...",
+            width=220,
+            height=24
+        )
+        self.fail_search_entry.pack(side="left", padx=(0, 8), pady=5)
+
+        self.fail_site_filter_var = ctk.StringVar(value="All Websites")
+        self.fail_site_filter = ctk.CTkOptionMenu(
+            self.fail_toolbar_frame,
+            variable=self.fail_site_filter_var,
+            values=["All Websites"],
+            command=lambda *_: self._populate_failures(),
+            width=135,
+            height=24,
+            dynamic_resizing=False
+        )
+        self.fail_site_filter.pack(side="left", padx=(0, 12), pady=5)
+
+        self.btn_retry_selected_fails = ctk.CTkButton(
+            self.fail_toolbar_frame,
+            text="🔁 Retry Selected (0)",
+            width=140,
+            height=24,
+            fg_color="#1565c0",
+            hover_color="#0d47a1",
+            state="disabled",
+            command=self._retry_selected_failures_action
+        )
+        self.btn_retry_selected_fails.pack(side="left", padx=(0, 8), pady=5)
+
+        self.btn_dismiss_selected_fails = ctk.CTkButton(
+            self.fail_toolbar_frame,
+            text="🗑️ Dismiss Selected (0)",
+            width=145,
+            height=24,
+            fg_color="#444",
+            hover_color="#c62828",
+            state="disabled",
+            command=self._dismiss_selected_failures_action
+        )
+        self.btn_dismiss_selected_fails.pack(side="left", padx=(0, 8), pady=5)
 
         self.fail_scroll_frame = ctk.CTkScrollableFrame(self.tab_failures, fg_color="#1e1e1e")
         self.fail_scroll_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
@@ -743,18 +814,71 @@ class DataEntryBotGUI(ctk.CTk):
         for widget in self.fail_scroll_frame.winfo_children():
             widget.destroy()
 
+        self.failure_checkbox_vars.clear()
+
         try:
             state_mgr = StateManager()
             all_recs = state_mgr.get_all_records()
-            fails = [r for r in all_recs if r.get("status") in ("FAILED", "MANUAL_REVIEW")]
-            self.fail_count_label.configure(text=f"Total: {len(fails)} failures")
+            all_fails = [r for r in all_recs if r.get("status") in ("FAILED", "MANUAL_REVIEW")]
 
-            if not fails:
+            # Dynamically update website filter dropdown values
+            unique_sites = sorted(list({(r.get("site_name") or r.get("site_id") or "") for r in all_fails if (r.get("site_name") or r.get("site_id"))}))
+            site_options = ["All Websites"] + unique_sites
+            if hasattr(self, "fail_site_filter"):
+                self.fail_site_filter.configure(values=site_options)
+                if self.fail_site_filter_var.get() not in site_options:
+                    self.fail_site_filter_var.set("All Websites")
+
+            selected_site = self.fail_site_filter_var.get().strip() if hasattr(self, "fail_site_filter_var") else "All Websites"
+            search_query = self.fail_search_var.get().strip().lower() if hasattr(self, "fail_search_var") else ""
+
+            fails = all_fails
+
+            # Filter by selected website dropdown
+            if selected_site and selected_site != "All Websites":
+                fails = [
+                    r for r in fails
+                    if (r.get("site_name") or "").lower() == selected_site.lower()
+                    or (r.get("site_id") or "").lower() == selected_site.lower()
+                ]
+
+            # Filter by search text query
+            if search_query:
+                fails = [
+                    r for r in fails
+                    if search_query in (r.get("site_name") or "").lower()
+                    or search_query in (r.get("site_id") or "").lower()
+                    or search_query in (r.get("client_name") or "").lower()
+                    or search_query in (r.get("client_id") or "").lower()
+                    or search_query in (r.get("email") or "").lower()
+                    or search_query in (r.get("error_summary") or "").lower()
+                ]
+
+            if len(fails) < len(all_fails):
+                self.fail_count_label.configure(text=f"Total: {len(all_fails)} failures ({len(fails)} matching)")
+            else:
+                self.fail_count_label.configure(text=f"Total: {len(all_fails)} failures")
+
+            if not all_fails:
+                self.select_all_fails_var.set(False)
+                self._on_failure_selection_change()
                 empty_lbl = ctk.CTkLabel(
                     self.fail_scroll_frame,
                     text="🎉 No failed registrations or exceptions recorded!",
                     font=ctk.CTkFont(size=13),
                     text_color="#81c784"
+                )
+                empty_lbl.pack(pady=30)
+                return
+
+            if not fails:
+                self.select_all_fails_var.set(False)
+                self._on_failure_selection_change()
+                empty_lbl = ctk.CTkLabel(
+                    self.fail_scroll_frame,
+                    text="🔍 No failure records match the current website / search filter.",
+                    font=ctk.CTkFont(size=13),
+                    text_color="#ffa726"
                 )
                 empty_lbl.pack(pady=30)
                 return
@@ -775,6 +899,10 @@ class DataEntryBotGUI(ctk.CTk):
                 site_name = r.get("site_name", "")
                 password = r.get("password") or ""
                 email = r.get("email") or ""
+
+                # Register checkbox variable for this row
+                chk_var = ctk.BooleanVar(value=False)
+                self.failure_checkbox_vars[(client_id, site_id)] = (chk_var, dict(r))
 
                 # Action buttons packed to right first
                 dismiss_btn = ctk.CTkButton(
@@ -822,6 +950,19 @@ class DataEntryBotGUI(ctk.CTk):
                     )
                     view_btn.pack(side="right", padx=(4, 4), pady=8)
 
+                # Selection checkbox on the left
+                chk = ctk.CTkCheckBox(
+                    row_frame,
+                    text="",
+                    variable=chk_var,
+                    width=22,
+                    height=22,
+                    checkbox_width=18,
+                    checkbox_height=18,
+                    command=self._on_failure_selection_change
+                )
+                chk.pack(side="left", padx=(8, 4), pady=8)
+
                 # Badge label
                 badge_lbl = ctk.CTkLabel(
                     row_frame,
@@ -830,7 +971,7 @@ class DataEntryBotGUI(ctk.CTk):
                     text_color="#ffa726" if is_review else "#ef5350",
                     width=85
                 )
-                badge_lbl.pack(side="left", padx=(10, 4), pady=8)
+                badge_lbl.pack(side="left", padx=(4, 4), pady=8)
 
                 info_lbl = ctk.CTkLabel(
                     row_frame,
@@ -841,8 +982,197 @@ class DataEntryBotGUI(ctk.CTk):
                 )
                 info_lbl.pack(side="left", padx=4, pady=8, fill="x", expand=True)
 
+            self.select_all_fails_var.set(False)
+            self._on_failure_selection_change()
+
         except Exception as e:
             logger.error(f"Failed to populate failures: {e}")
+
+    def _on_failure_selection_change(self):
+        """Updates selection label and enables/disables batch action buttons based on checked items."""
+        selected_count = sum(1 for var, _ in self.failure_checkbox_vars.values() if var.get())
+        total_count = len(self.failure_checkbox_vars)
+
+        self.fail_selected_label.configure(text=f"({selected_count} selected)")
+
+        # Sync Select All checkbox state without recursive feedback
+        if total_count > 0 and selected_count == total_count:
+            self.select_all_fails_var.set(True)
+        else:
+            self.select_all_fails_var.set(False)
+
+        # Update button states
+        is_active = not self.is_running
+        if selected_count > 0 and is_active:
+            self.btn_retry_selected_fails.configure(
+                text=f"🔁 Retry Selected ({selected_count})",
+                state="normal"
+            )
+            self.btn_dismiss_selected_fails.configure(
+                text=f"🗑️ Dismiss Selected ({selected_count})",
+                state="normal",
+                fg_color="#8e0000",
+                hover_color="#c62828"
+            )
+        else:
+            self.btn_retry_selected_fails.configure(
+                text=f"🔁 Retry Selected ({selected_count})",
+                state="disabled"
+            )
+            self.btn_dismiss_selected_fails.configure(
+                text=f"🗑️ Dismiss Selected ({selected_count})",
+                state="disabled",
+                fg_color="#444",
+                hover_color="#555"
+            )
+
+    def _toggle_select_all_failures(self):
+        """Toggles all failure item checkboxes based on the master checkbox."""
+        new_val = self.select_all_fails_var.get()
+        for var, _ in self.failure_checkbox_vars.values():
+            var.set(new_val)
+        self._on_failure_selection_change()
+
+    def _dismiss_selected_failures_action(self):
+        """Dismisses and deletes all currently selected failure records from the state database."""
+        selected_keys = [k for k, (var, _) in self.failure_checkbox_vars.items() if var.get()]
+        if not selected_keys:
+            return
+
+        confirm = messagebox.askyesno(
+            "Dismiss Selected Failures",
+            f"Are you sure you want to dismiss {len(selected_keys)} selected failure record(s)?\n\n"
+            f"This will remove them from the failure list and reset their status to pending."
+        )
+        if confirm:
+            try:
+                state_mgr = StateManager()
+                deleted = state_mgr.reset_records(selected_keys)
+                logger.info(f"Dismissed {deleted} selected failed record(s) from state database.")
+                self._populate_failures()
+                self._update_stats_display()
+                messagebox.showinfo("Failures Dismissed", f"Successfully dismissed {deleted} failure record(s).")
+            except Exception as e:
+                logger.error(f"Failed to dismiss selected failures: {e}")
+                messagebox.showerror("Error", f"Failed to dismiss failures: {e}")
+
+    def _retry_selected_failures_action(self):
+        """Executes fresh registration for all selected failed client-site pairs in sequence."""
+        selected_items = [
+            (k[0], k[1], meta)
+            for k, (var, meta) in self.failure_checkbox_vars.items()
+            if var.get()
+        ]
+        if not selected_items:
+            return
+
+        if self.is_running:
+            messagebox.showwarning("Process Running", "An automation or retry process is already running. Please wait or stop it first.")
+            return
+
+        confirm = messagebox.askyesno(
+            "Retry Selected Failures",
+            f"Are you sure you want to run fresh registration for {len(selected_items)} selected record(s)?"
+        )
+        if not confirm:
+            return
+
+        source = "excel" if self.src_selector.get() == "Excel (.xlsx)" else "sheets"
+        excel_path = Path(self.excel_path_var.get())
+        sheet_url = self.sheets_url_var.get()
+        headed = "Visible" in self.browser_mode_selector.get()
+        verify_login = self.auto_verify_var.get()
+
+        self.is_running = True
+        self.stop_requested = False
+        self.stop_event.clear()
+        self.btn_start.configure(state="disabled")
+        self.btn_dry_run.configure(state="disabled")
+        self.btn_stop.configure(state="normal")
+        self.btn_retry_selected_fails.configure(state="disabled")
+        self.btn_dismiss_selected_fails.configure(state="disabled")
+        self.status_badge.configure(text=f"● RETRYING (0/{len(selected_items)})", text_color="#ffa726")
+        self.progress_bar.set(0.05)
+
+        def worker():
+            total = len(selected_items)
+            succeeded = 0
+            failed = 0
+            try:
+                provider = get_data_provider(source=source, excel_path=excel_path, sheet_url=sheet_url)
+                clients = provider.get_valid_clients()
+                client_map = {c.client_id: c for c in clients}
+                name_map = {c.full_name.lower(): c for c in clients}
+
+                logger.info(f"🚀 Starting batch fresh retry for {total} selected failed record(s)...")
+
+                for idx, (cid, sid, meta) in enumerate(selected_items, 1):
+                    if self.stop_event.is_set() or self.stop_requested:
+                        logger.warning(f"⏹ Batch retry stopped by user after {idx - 1}/{total} records.")
+                        break
+
+                    cname = meta.get("client_name", cid)
+                    sname = meta.get("site_name", sid)
+
+                    self.after(0, lambda i=idx, t=total: [
+                        self.status_badge.configure(text=f"● RETRYING ({i}/{t})", text_color="#ffa726"),
+                        self.progress_bar.set(i / t)
+                    ])
+
+                    target_client = client_map.get(cid) or name_map.get(cname.lower())
+                    if not target_client:
+                        logger.error(f"[{idx}/{total}] Could not locate client '{cname}' ({cid}) in data provider source.")
+                        failed += 1
+                        continue
+
+                    logger.info(f"[{idx}/{total}] Fresh re-registration: {cname} on {sname} ({sid})")
+                    try:
+                        result = register_single_account(
+                            client=target_client,
+                            site_id=sid,
+                            provider=provider,
+                            headed=headed,
+                            verify_login=verify_login
+                        )
+                        if result.status == RegistrationStatus.SUCCESS:
+                            succeeded += 1
+                            logger.info(f"[{idx}/{total}] ✅ Successfully registered {cname} on {sname}!")
+                        else:
+                            failed += 1
+                            logger.warning(f"[{idx}/{total}] ❌ Retry failed for {cname} on {sname}: {result.error_summary}")
+                    except Exception as ex:
+                        failed += 1
+                        logger.error(f"[{idx}/{total}] Exception during retry for {cname} on {sname}: {ex}")
+
+                summary_msg = (
+                    f"Batch Fresh Retry Finished!\n\n"
+                    f"Total Processed: {succeeded + failed}/{total}\n"
+                    f"✅ Succeeded: {succeeded}\n"
+                    f"❌ Failed: {failed}"
+                )
+                if self.stop_event.is_set() or self.stop_requested:
+                    summary_msg += "\n\n⚠️ Process was stopped before completing all records."
+
+                self.after(0, lambda: messagebox.showinfo("Batch Retry Complete", summary_msg))
+
+            except Exception as e:
+                logger.error(f"Batch retry worker encountered error: {e}")
+                self.after(0, lambda err_s=str(e): messagebox.showerror("Batch Retry Error", f"Error during batch retry: {err_s}"))
+            finally:
+                self.is_running = False
+                self.stop_requested = False
+                self.after(0, lambda: [
+                    self.btn_start.configure(state="normal"),
+                    self.btn_dry_run.configure(state="normal"),
+                    self.btn_stop.configure(state="disabled"),
+                    self.status_badge.configure(text="● READY", text_color="#81c784"),
+                    self.progress_bar.set(0),
+                    self._populate_registered_accounts(),
+                    self._populate_failures(),
+                    self._update_stats_display()
+                ])
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _retry_single_failed_action(self, client_id: str, site_id: str, client_name: str, site_name: str, btn: ctk.CTkButton):
         """Retries registration for a single failed client/site combination."""
@@ -1017,7 +1347,7 @@ class DataEntryBotGUI(ctk.CTk):
         limit = int(self.limit_slider.get())
         client_filter = self.filter_entry.get().strip() or None
         verify_login = self.auto_verify_var.get()
-        retry_failed = self.retry_failed_var.get()
+        retry_failed = False
 
         self.is_running = True
         self.stop_requested = False
@@ -1025,6 +1355,8 @@ class DataEntryBotGUI(ctk.CTk):
         self.btn_start.configure(state="disabled")
         self.btn_dry_run.configure(state="disabled")
         self.btn_stop.configure(state="normal")
+        self.btn_retry_selected_fails.configure(state="disabled")
+        self.btn_dismiss_selected_fails.configure(state="disabled")
         self.status_badge.configure(text="● RUNNING", text_color="#ffa726")
         self.progress_bar.set(0.1)
 
@@ -1099,6 +1431,7 @@ class DataEntryBotGUI(ctk.CTk):
             self.progress_bar.set(1.0)
         self.stop_requested = False
         self._update_stats_display()
+        self._on_failure_selection_change()
 
     def _on_window_closing(self):
         """Cleanly shuts down worker threads and browsers when closing the application."""

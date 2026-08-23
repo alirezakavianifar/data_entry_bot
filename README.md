@@ -167,8 +167,12 @@ In the Desktop GUI:
    - On every batch run, `AutomationEngine` checks which clients still have pending registrations on the active site adapters.
    - Any client who has already finished or failed on all selected sites is skipped, and the batch window automatically advances to the next set of unprocessed clients up to the chosen limit.
 2. **Handling Failures in the GUI ("⚠️ Failures & Review" Tab):**
+   - **Website Filter Dropdown & Search Bar:** Filter failure records by a specific website (e.g. `BresBet`, `BetGoodwin`) or search for any client name, site, or error text.
+   - **Multi-Selection Checkboxes & "Select All":** Select individual failure items or click "Select All" to target only the currently visible/filtered records.
+   - **`🔁 Retry Selected (N)` Button:** Runs sequential fresh registrations in a background worker for all selected failed records, displaying real-time progress and live logs.
+   - **`🗑️ Dismiss Selected (N)` Button:** Removes all selected failure records from the database in one batch operation, resetting their state so they can be re-evaluated.
    - **`🔁 Retry` Button:** Runs on-demand registration for a single failed client/site.
-   - **`🗑️ Dismiss` Button:** Removes the failure record from the local SQLite state.
+   - **`🗑️ Dismiss` Button:** Removes a single failure record from the local SQLite state.
    - **`🧹 Clear All Failures` Button:** Clears all recorded failures in one click to allow a fresh run across the entire list.
    - **`🔁 Retry Failed Records` Toggle:** When enabled in the sidebar, batch runs will include previously failed records instead of skipping them.
 

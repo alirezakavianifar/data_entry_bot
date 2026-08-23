@@ -23,7 +23,8 @@ class PlanetSportBetAdapter(BaseSiteAdapter):
 
         try:
             # 1. Direct navigation to clean signup URL or trigger modal
-            if "?account=signup" not in page.url and "?promoId=" not in page.url:
+            cur_url = page.url if isinstance(getattr(page, "url", None), str) else ""
+            if "?account=signup" not in cur_url and "?promoId=" not in cur_url:
                 try:
                     page.goto("https://planetsportbet.com/?account=signup", wait_until="domcontentloaded", timeout=25000)
                     page.wait_for_timeout(2000)
@@ -69,16 +70,32 @@ class PlanetSportBetAdapter(BaseSiteAdapter):
             pwd_inp.fill(password)
             page.wait_for_timeout(500)
 
-            create_acc_btn = page.locator('button:has-text("Join Here"), button[data-test="create-account-button"], button[type="submit"]:has-text("Join"), button[type="submit"]:has-text("Sign Up")').first
+            create_acc_btn = page.locator('button:has-text("Create Account"), button:has-text("Join Here"), button[data-test="create-account-button"], button[type="submit"]:has-text("Join"), button[type="submit"]:has-text("Sign Up"), button[type="submit"]').first
             if create_acc_btn.is_visible(timeout=2000):
                 create_acc_btn.click(force=True)
                 page.wait_for_timeout(3000)
 
             # Check for Step 1 validation errors
-            step1_err = page.locator('div[class*="error"], span[class*="error"], p[class*="error"]').first
-            if step1_err.is_visible(timeout=1000):
+            step1_err = page.locator('div[class*="error"]:visible, span[class*="error"]:visible, p[class*="error"]:visible, [data-test*="error"]:visible, [class*="errorMessage"]:visible, :has-text("already exists"):visible').first
+            if step1_err.is_visible(timeout=1500):
                 err_txt = step1_err.inner_text().strip()
-                if any(kw in err_txt.lower() for kw in ["already exists", "invalid", "in use", "taken"]):
+                if is_already_registered_error(err_txt) or any(kw in err_txt.lower() for kw in ["already exists", "in use", "already registered", "taken"]):
+                    log.warning(f"Planet Sport Bet: Client {client.full_name} is ALREADY REGISTERED ({err_txt})")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.ALREADY_REGISTERED,
+                        email=client.email,
+                        password=password,
+                        account_reference="PlanetSportBet-Existing",
+                        error_summary=f"Already registered: {err_txt}",
+                        screenshot_path=bundle.screenshot_path,
+                        dom_snapshot_path=bundle.dom_snapshot_path
+                    )
+                elif any(kw in err_txt.lower() for kw in ["invalid", "error", "required"]):
                     log.warning(f"Step 1 validation error: {err_txt}")
                     bundle = capture_failure_bundle(page, client.client_id, self.site_id, "step1_error", Exception(err_txt))
                     return RegistrationResult(
@@ -103,6 +120,28 @@ class PlanetSportBetAdapter(BaseSiteAdapter):
             postcode_inp = page.locator('input[data-test="postcode-input"]').first
 
             if not fn_inp.is_visible(timeout=5000):
+                # Fallback: check if Step 1 duplicate banner appeared delayed
+                dup_err = page.locator('div[class*="error"]:visible, span[class*="error"]:visible, p[class*="error"]:visible, [data-test*="error"]:visible, :has-text("already exists"):visible, :has-text("in use"):visible').first
+                if dup_err.is_visible(timeout=1000):
+                    raw_txt = dup_err.inner_text().strip().replace("\n", " - ")
+                    clean_err = extract_clean_error_message(raw_txt) or raw_txt
+                    if is_already_registered_error(raw_txt) or "already exists" in raw_txt.lower():
+                        log.warning(f"Planet Sport Bet: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
+                        bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                        return RegistrationResult(
+                            client_id=client.client_id,
+                            client_name=client.full_name,
+                            site_id=self.site_id,
+                            site_name=self.site_name,
+                            status=RegistrationStatus.ALREADY_REGISTERED,
+                            email=client.email,
+                            password=password,
+                            account_reference="PlanetSportBet-Existing",
+                            error_summary=f"Already registered: {clean_err}",
+                            screenshot_path=bundle.screenshot_path,
+                            dom_snapshot_path=bundle.dom_snapshot_path
+                        )
+
                 bundle = capture_failure_bundle(page, client.client_id, self.site_id, "step2_inputs_missing")
                 return RegistrationResult(
                     client_id=client.client_id,

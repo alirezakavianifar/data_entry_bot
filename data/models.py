@@ -71,6 +71,37 @@ class Client(BaseModel):
         val = re.sub(r"\s+", " ", val)
         return val
 
+    @field_validator("town_city", mode="before")
+    @classmethod
+    def clean_town_city(cls, v) -> str:
+        """Cleans UK town/city string to prevent bookmaker validation errors (e.g. commas, counties, special characters)."""
+        if not v:
+            return ""
+        # Split by commas, slashes, colons, or newlines
+        parts = [p.strip() for p in re.split(r"[,/:\n]", str(v)) if p.strip()]
+        if not parts:
+            return ""
+        val = parts[0]
+        # If the first part has digits (e.g. 'Unit E3 45 Dace Road...'), look for a non-digit city part (e.g. 'London')
+        if any(ch.isdigit() for ch in val) and len(parts) > 1:
+            for p in parts[1:]:
+                if not any(ch.isdigit() for ch in p) and len(p) >= 3:
+                    val = p
+                    break
+        # Keep only alphabet letters, spaces, hyphens, and apostrophes
+        val = re.sub(r"[^a-zA-Z\s\-']", "", val).strip()
+        # Collapse multiple spaces
+        val = re.sub(r"\s+", " ", val)
+        return val or str(v).strip()
+
+    @field_validator("address_line1", mode="before")
+    @classmethod
+    def clean_address_line1(cls, v) -> str:
+        if not v:
+            return ""
+        val = str(v).strip().rstrip(",").rstrip(".").strip()
+        return val
+
     @property
     def dob_day(self) -> str:
         return str(self.dob.day).zfill(2) if self.dob else "01"

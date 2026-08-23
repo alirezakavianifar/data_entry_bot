@@ -214,6 +214,7 @@ class AutomationEngine:
                             self.provider.record_success(result)
                             stats["success_count"] += 1
                         elif result.status == RegistrationStatus.ALREADY_REGISTERED:
+                            self.provider.record_success(result)
                             logger.info(f"ℹ️ {client.full_name} recorded as ALREADY_REGISTERED on {site.site_name}")
                             stats["already_registered_count"] += 1
                         else:
@@ -228,7 +229,31 @@ class AutomationEngine:
 
                     except Exception as e:
                         logger.error(f"Execution error on {site.site_name} for {client.full_name}: {e}")
+                        fail_result = RegistrationResult(
+                            client_id=client.client_id,
+                            client_name=client.full_name,
+                            site_id=site.site_id,
+                            site_name=site.site_name,
+                            status=RegistrationStatus.FAILED,
+                            email=client.email,
+                            password=password,
+                            error_summary=str(e)
+                        )
+                        self.state_mgr.record_result(fail_result)
+                        self.provider.record_failure(fail_result)
                         stats["failed_count"] += 1
+                        if on_progress:
+                            try:
+                                on_progress(fail_result, stats)
+                            except Exception:
+                                pass
+
+                    finally:
+                        self.browser_mgr.stop_trace(context, export_name=f"{client.client_id}_{site.site_id}")
+                        try:
+                            context.close()
+                        except Exception:
+                            pass
 
                 stats["processed_clients"] += 1
 
@@ -259,64 +284,64 @@ def verify_single_account(
     headed: bool = True,
     provider: Optional[BaseDataProvider] = None
 ) -> Tuple[bool, Optional[str], Optional[str]]:
-
     """
-    On-demand single account login verification utility.
-    Launches browser, attempts login, captures proof screenshot, and updates StateManager.
-    If login fails (e.g. invalid credentials), removes false positive row from provider and updates state to FAILED.
-    Returns (success, proof_path, error_message).
+    Executes an on-demand login verification for a single registered account.
     """
-    state_mgr = StateManager()
-    browser_mgr = BrowserManager(headless=not headed)
     adapters = get_site_adapters(filter_sites=[site_id])
     if not adapters:
-        return False, None, f"No adapter found for site '{site_id}'"
+        raise ValueError(f"No adapter found for site '{site_id}'")
 
-    adapter = adapters[0]
-    logger.info(f"Starting on-demand login verification: Client '{client_id}', Site '{site_id}', Headed={headed}")
+    site = adapters[0]
+    browser_mgr = BrowserManager(headless=not headed)
+    state_mgr = StateManager()
 
     try:
         browser_mgr.start()
-        context = browser_mgr.new_context()
+        context = browser_mgr.new_context(trace_name=f"verify_{client_id}_{site_id}")
         page = context.new_page()
 
-        success, proof_path, error_msg = adapter.login(
+        success, proof_path, err = site.login(
             page=page,
             username_or_email=email,
             password=password,
             client_id=client_id
         )
 
-        is_pending = is_pending_verification_error(error_msg or "")
+        is_pending = is_pending_verification_error(err or "")
 
-        state_mgr.update_login_verification(
-            client_id=client_id,
-            site_id=site_id,
-            success=success,
-            screenshot_path=proof_path,
-            error_summary=error_msg,
-            is_pending_verification=is_pending
-        )
+        if is_pending:
+            logger.info(f"ℹ️ Account verified with valid credentials, but pending user activation ({err}). Preserving credentials.")
+            state_mgr.update_login_verification(
+                client_id=client_id,
+                site_id=site_id,
+                success=False,
+                screenshot_path=proof_path,
+                error_summary=err,
+                is_pending_verification=True
+            )
+        else:
+            state_mgr.update_login_verification(
+                client_id=client_id,
+                site_id=site_id,
+                success=success,
+                screenshot_path=proof_path,
+                error_summary=err,
+                is_pending_verification=False
+            )
 
-        if not success and not is_pending:
-            # Only remove false positive record from spreadsheet if credentials are truly invalid
-            if provider:
-                c_name = client_name
-                s_name = site_name or adapter.site_name
-                deleted = provider.remove_success(client_name=c_name, site_name=s_name, email=email)
-                logger.info(f"Removed {deleted} false positive row(s) from provider for {client_id}")
-        elif is_pending:
-            logger.info(f"Account for {client_id} on {site_id} is valid but requires activation ({error_msg}). Preserving in spreadsheet.")
+            # False Positive Cleanup
+            if not success and provider:
+                logger.warning(f"🧹 Removing false positive record for {client_name or email} on {site_name or site_id} from spreadsheet...")
+                provider.remove_success(
+                    client_name=client_name,
+                    site_name=site_name,
+                    email=email
+                )
 
-        try:
-            context.close()
-        except Exception:
-            pass
-
-        return success, proof_path, error_msg
+        return success, proof_path, err
 
     except Exception as e:
-        logger.error(f"Error in verify_single_account for {client_id} on {site_id}: {e}")
+        logger.error(f"Error verifying account for {client_id} on {site_id}: {e}")
         return False, None, str(e)
     finally:
         browser_mgr.close()
@@ -391,7 +416,7 @@ def register_single_account(
 
         state_mgr.record_result(result)
 
-        if result.status == RegistrationStatus.SUCCESS:
+        if result.status in (RegistrationStatus.SUCCESS, RegistrationStatus.ALREADY_REGISTERED):
             provider.record_success(result)
         else:
             provider.record_failure(result)
@@ -400,5 +425,3 @@ def register_single_account(
 
     finally:
         browser_mgr.close()
-
-

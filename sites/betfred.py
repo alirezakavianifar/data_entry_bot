@@ -94,35 +94,122 @@ class BetfredAdapter(BaseSiteAdapter):
             page.locator('div[data-actionable="RegistrationPage.TermsAndConditions.agree_terms"]').first.click(force=True)
             page.wait_for_timeout(500)
 
-            # Click Continue on Step 1
-            log.info("Submitting Step 1...")
-            cont1_btn = page.locator('button[data-actionable="RegistrationPage.NavigationButtonsPage1.Continue"], button:has-text("Continue")').first
-            if cont1_btn.is_visible(timeout=2000):
-                cont1_btn.click(force=True)
-                page.wait_for_timeout(3500)
+            # Step 1 Submission with Automatic Network Error Recovery Loop
+            max_step1_attempts = 3
+            for attempt in range(1, max_step1_attempts + 1):
+                log.info(f"Submitting Step 1 (Attempt {attempt}/{max_step1_attempts})...")
+                cont1_btn = page.locator('button[data-actionable="RegistrationPage.NavigationButtonsPage1.Continue"], button:has-text("Continue")').first
+                if cont1_btn.is_visible(timeout=2000):
+                    cont1_btn.click(force=True)
+                    page.wait_for_timeout(3000)
 
-            # Check for Network Error / Datacenter block modal
-            net_err = page.locator(':has-text("Network Error"), :has-text("previous operation was unsuccessful"), [data-actionable="common.Alert.Background"]:visible').first
-            if net_err.is_visible(timeout=2000):
-                log.warning("Betfred API rejected registration with Network Error (HTTP 462 Datacenter IP Block)")
-                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "network_error_ip_block")
-                return RegistrationResult(
-                    client_id=client.client_id,
-                    client_name=client.full_name,
-                    site_id=self.site_id,
-                    site_name=self.site_name,
-                    status=RegistrationStatus.FAILED,
-                    email=client.email,
-                    password=password,
-                    error_summary="Betfred rejected IP: HTTP 462 Datacenter/VPN block (Requires UK Residential IP)",
-                    screenshot_path=bundle.screenshot_path
-                )
+                # 1. Check for Step 1 inline validation errors & already registered notifications
+                step1_err = page.locator(
+                    '[data-actionable*="email.error" i], '
+                    '[data-actionable*="error" i], '
+                    'span[class*="error" i]:visible, '
+                    'div[class*="error" i]:visible, '
+                    'p[class*="error" i]:visible, '
+                    ':has-text("already have an account"):visible, '
+                    ':has-text("already registered"):visible'
+                ).first
+
+                if step1_err.is_visible(timeout=1500):
+                    raw_err = step1_err.inner_text().strip().replace("\n", " - ")
+                    clean_err = extract_clean_error_message(raw_err)
+                    if is_already_registered_error(raw_err) or any(k in raw_err.lower() for k in ("already have an account", "already registered", "account set up with this", "already exists", "log in to your account")):
+                        log.warning(f"⚠️ Betfred: Client {client.full_name} is ALREADY REGISTERED ({clean_err or raw_err})")
+                        bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                        return RegistrationResult(
+                            client_id=client.client_id,
+                            client_name=client.full_name,
+                            site_id=self.site_id,
+                            site_name=self.site_name,
+                            status=RegistrationStatus.ALREADY_REGISTERED,
+                            email=client.email,
+                            password=password,
+                            account_reference="Betfred-Existing",
+                            error_summary=f"Already registered: {clean_err or raw_err}",
+                            screenshot_path=bundle.screenshot_path,
+                            dom_snapshot_path=bundle.dom_snapshot_path
+                        )
+
+                # 2. Check if Step 2 Personal Details has appeared (Success!)
+                fn_inp = page.locator('input[data-actionable="RegistrationPage.PersonalSection.first_name"], input[name="firstName"]').first
+                if fn_inp.is_visible(timeout=2000):
+                    log.info("Step 1 succeeded! Advanced to Step 2 (Personal Details).")
+                    break
+
+                # 3. Check for Network Error modal ("previous operation was unsuccessful")
+                net_err = page.locator(':has-text("Network Error"), :has-text("previous operation was unsuccessful"), [data-actionable="common.Alert.Background"]:visible, button:has-text("Ok"):visible').first
+                if net_err.is_visible(timeout=2000):
+                    log.warning(f"Transient Network Error popup detected on Step 1 (Attempt {attempt}/{max_step1_attempts}). Dismissing and retrying...")
+                    # Dismiss modal by clicking 'Ok' or closing overlay
+                    page.evaluate("""() => {
+                        const okBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText && (b.innerText.trim() === 'Ok' || b.innerText.trim() === 'OK'));
+                        if (okBtn) okBtn.click();
+                        const closeBtn = document.querySelector('button[class*="close"], [aria-label="Close"]');
+                        if (closeBtn) closeBtn.click();
+                        const alertBg = document.querySelector('[data-actionable="common.Alert.Background"]');
+                        if (alertBg) alertBg.remove();
+                    }""")
+                    page.wait_for_timeout(2000)
+
+                    # Ensure Terms checkbox remains checked
+                    try:
+                        terms_box = page.locator('div[data-actionable="RegistrationPage.TermsAndConditions.agree_terms"]').first
+                        if terms_box.is_visible(timeout=1000):
+                            terms_box.click(force=True)
+                    except Exception:
+                        pass
+                    page.wait_for_timeout(1000)
+
+                    if attempt == max_step1_attempts:
+                        # Before declaring failure, check if the email was already taken on Betfred
+                        body_txt = ""
+                        try:
+                            raw_t = page.locator("form, body").first.inner_text()
+                            if isinstance(raw_t, str):
+                                body_txt = raw_t
+                        except Exception:
+                            pass
+                        if body_txt and (is_already_registered_error(body_txt) or "already have an account" in body_txt.lower() or "account set up with this" in body_txt.lower()):
+                            clean_err = extract_clean_error_message(body_txt)
+                            log.warning(f"⚠️ Betfred: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
+                            bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                            return RegistrationResult(
+                                client_id=client.client_id,
+                                client_name=client.full_name,
+                                site_id=self.site_id,
+                                site_name=self.site_name,
+                                status=RegistrationStatus.ALREADY_REGISTERED,
+                                email=client.email,
+                                password=password,
+                                account_reference="Betfred-Existing",
+                                error_summary=f"Already registered: {clean_err or 'It looks like you already have an account set up with this email address'}",
+                                screenshot_path=bundle.screenshot_path,
+                                dom_snapshot_path=bundle.dom_snapshot_path
+                            )
+
+                        log.warning("Betfred Network Error persisted after multiple retries.")
+                        bundle = capture_failure_bundle(page, client.client_id, self.site_id, "network_error_ip_block")
+                        return RegistrationResult(
+                            client_id=client.client_id,
+                            client_name=client.full_name,
+                            site_id=self.site_id,
+                            site_name=self.site_name,
+                            status=RegistrationStatus.FAILED,
+                            email=client.email,
+                            password=password,
+                            error_summary="Betfred rejected request: Network Error (Transient server rate limit / network block)",
+                            screenshot_path=bundle.screenshot_path
+                        )
 
             # 3. STEP 2: Personal Details (Title, Name, DOB)
             fn_inp = page.locator('input[data-actionable="RegistrationPage.PersonalSection.first_name"], input[name="firstName"]').first
             ln_inp = page.locator('input[data-actionable="RegistrationPage.PersonalSection.last_name"], input[name="lastName"]').first
 
-            if fn_inp.is_visible(timeout=3000):
+            if fn_inp.is_visible(timeout=1000):
                 log.info("Filling Step 2 Personal Details (Name, DOB)")
                 mr_pill = page.locator('button[data-actionable="RegistrationPage.PersonalSection.title.Mr"], button:has-text("Mr")').first
                 if mr_pill.is_visible(timeout=1000):
@@ -144,56 +231,117 @@ class BetfredAdapter(BaseSiteAdapter):
                     page.wait_for_timeout(3000)
 
             # 4. STEP 3: Contact Details (Mobile Number & Security Question)
-            phone_inp = page.locator('input[data-actionable*="telephone"], input[name*="phone" i], input[type="tel"]').first
+            phone_inp = page.locator('input[data-actionable="RegistrationPage.TelephoneNumberInput.telephone.floatingHelp"], input[id="RegistrationPage.TelephoneNumberInput.telephone.telephone"], input[name="telephone"], input[data-actionable*="telephone" i], input[type="tel"]').first
             if phone_inp.is_visible(timeout=3000):
                 log.info("Filling Step 3 Contact Details")
                 phone_inp.fill(client.phone)
                 page.wait_for_timeout(300)
 
-                # Security Question
-                sq_select = page.locator('select, [data-actionable*="securityQuestion"]').first
-                if sq_select.is_visible(timeout=1500):
-                    sq_select.select_option(index=1)
+                # Security Question (Specific selector to avoid matching the telephone areaCode select)
+                sq_select = page.locator(
+                    'select[data-actionable="RegistrationPage.Dropdown.securityQuestion"], '
+                    'select[name="securityQuestion"], '
+                    'select#RegistrationPage\\.Dropdown\\.securityQuestion, '
+                    'select[data-actionable*="securityQuestion" i], '
+                    'select[name*="securityQuestion" i]'
+                ).first
+                if sq_select.is_visible(timeout=2500):
+                    try:
+                        sq_select.select_option(index=1)
+                    except Exception:
+                        sq_select.select_option(label="Your mother's maiden name?")
+                    page.wait_for_timeout(300)
                 else:
-                    page.locator('div:has-text("Choose your question"), [data-actionable*="question"]').first.click()
-                    page.wait_for_timeout(500)
-                    page.locator('li, div[role="option"]').first.click()
+                    dropdown_trigger = page.locator('div:has-text("Choose your question"), [data-actionable*="securityQuestion" i]').first
+                    if dropdown_trigger.is_visible(timeout=1500):
+                        dropdown_trigger.click(force=True)
+                        page.wait_for_timeout(500)
+                        page.locator('li:not(:has-text("Choose your question")), div[role="option"]:not(:has-text("Choose your question"))').first.click(force=True)
 
-                ans_inp = page.locator('input[data-actionable*="answer" i], input[name*="answer" i]').first
-                if ans_inp.is_visible(timeout=1000):
+                ans_inp = page.locator(
+                    'input[data-actionable="RegistrationPage.ContactSection.security_answer"], '
+                    'input[name="securityAnswer"], '
+                    'input#RegistrationPage\\.ContactSection\\.security_answer, '
+                    'input[data-actionable*="security_answer" i], '
+                    'input[name*="answer" i]'
+                ).first
+                if ans_inp.is_visible(timeout=1500):
                     ans_inp.fill("London")
+                    page.wait_for_timeout(300)
 
-                cont3_btn = page.locator('button[data-actionable*="Continue"], button:has-text("Continue")').first
+                cont3_btn = page.locator(
+                    'button[data-actionable="RegistrationPage.NavigationButtonsPage3.Continue"], '
+                    'button:has-text("Continue"):not(:has-text("Back"))'
+                ).first
                 if cont3_btn.is_visible(timeout=2000):
                     cont3_btn.click(force=True)
                     page.wait_for_timeout(3000)
 
             # 5. STEP 4: Address Details
-            pc_inp = page.locator('input[data-actionable*="postcode" i], input[placeholder*="postcode" i]').first
+            pc_inp = page.locator(
+                'input[data-actionable="RegistrationPage.search_address"], '
+                'input#search, '
+                'input[data-actionable*="search_address"], '
+                'input[data-actionable*="postcode" i], '
+                'input[placeholder*="address" i], '
+                'input[placeholder*="postcode" i]'
+            ).first
             if pc_inp.is_visible(timeout=3000):
-                log.info(f"Filling Step 4 Address Details: {client.postcode}")
-                pc_inp.fill(client.postcode)
-                find_addr = page.locator('button:has-text("Find Address"), button:has-text("Search")').first
-                if find_addr.is_visible(timeout=2000):
-                    find_addr.click(force=True)
-                    page.wait_for_timeout(2000)
+                search_query = f"{client.address_line1}, {client.postcode}" if client.address_line1 else client.postcode
+                log.info(f"Filling Step 4 Address Details: {search_query}")
+                pc_inp.click()
+                page.keyboard.type(search_query, delay=50)
+                page.wait_for_timeout(1500)
 
-                addr_opt = page.locator('select[data-actionable*="address" i], select[name*="address" i]').first
-                if addr_opt.is_visible(timeout=1500):
-                    addr_opt.select_option(index=1)
-                    page.wait_for_timeout(500)
-                
-                cont4_btn = page.locator('button[data-actionable*="Continue"], button:has-text("Continue")').first
+                # Look for Loqate / PCA Predict suggestion item (.pcaitem) or select dropdown
+                sug = page.locator('.pcaitem:visible, div[class*="pcaitem"]:visible, div[role="option"]:visible').first
+                if sug.is_visible(timeout=3000):
+                    log.info("Selecting address suggestion from dropdown...")
+                    sug.click(force=True)
+                    page.wait_for_timeout(1000)
+                else:
+                    # Fallback: Check select dropdown or press enter
+                    addr_opt = page.locator('select[data-actionable*="address" i], select[name*="address" i]').first
+                    if addr_opt.is_visible(timeout=2000):
+                        try:
+                            addr_opt.select_option(index=1)
+                        except Exception:
+                            addr_opt.click(force=True)
+                    else:
+                        page.keyboard.press("ArrowDown")
+                        page.wait_for_timeout(300)
+                        page.keyboard.press("Enter")
+                    page.wait_for_timeout(1000)
+
+                cont4_btn = page.locator(
+                    'button[data-actionable="RegistrationPage.NavigationButtonsPage4.Continue"], '
+                    'button:has-text("Continue")'
+                ).first
                 if cont4_btn.is_visible(timeout=2000):
                     cont4_btn.click(force=True)
                     page.wait_for_timeout(3000)
 
             # 6. STEP 5: Settings & Final Submit
-            submit_btn = page.locator('button:has-text("Register"), button:has-text("Create my account"), button[type="submit"]:has-text("Register")').first
+            limit_later = page.locator('text="I will set a limit later", [data-actionable*="limit_later" i], div:has-text("set a limit later")').first
+            if limit_later.is_visible(timeout=3000):
+                log.info("Step 5: Selecting 'I will set a limit later'...")
+                limit_later.click(force=True)
+                page.wait_for_timeout(500)
+
+            # Scroll down to make Register button visible
+            page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+            page.wait_for_timeout(500)
+
+            submit_btn = page.locator(
+                'button[data-actionable="RegistrationPage.NavigationButtonsPage5.Register"], '
+                'button[data-actionable="RegistrationPage.NavigationButtonsPage5.Continue"], '
+                'button:has-text("Register"):not(:has-text("Back")), '
+                'button:has-text("Create my account")'
+            ).first
             if submit_btn.is_visible(timeout=3000):
                 log.info("Submitting final registration on Betfred")
                 submit_btn.click(force=True)
-                page.wait_for_timeout(6000)
+                page.wait_for_timeout(8000)
 
             # 7. Post-Submission & Result Verification
             error_modal = page.locator('div[class*="error"]:visible, div[role="alert"]:visible, .error-message:visible, [class*="Alert"]:visible').first
@@ -233,6 +381,33 @@ class BetfredAdapter(BaseSiteAdapter):
                         dom_snapshot_path=bundle.dom_snapshot_path
                     )
 
+            # Check page body for already registered / recovery prompt first
+            body_txt = ""
+            try:
+                raw_txt = page.locator("body").inner_text()
+                if isinstance(raw_txt, str):
+                    body_txt = raw_txt
+            except Exception:
+                pass
+
+            if body_txt and (is_already_registered_error(body_txt) or any(k in body_txt.lower() for k in ("already have an account", "already registered", "recovering your account", "you may already have an account"))):
+                clean_err = extract_clean_error_message(body_txt)
+                log.warning(f"⚠️ Betfred: Client {client.full_name} is ALREADY REGISTERED ({clean_err or 'You may already have an account'})")
+                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                return RegistrationResult(
+                    client_id=client.client_id,
+                    client_name=client.full_name,
+                    site_id=self.site_id,
+                    site_name=self.site_name,
+                    status=RegistrationStatus.ALREADY_REGISTERED,
+                    email=client.email,
+                    password=password,
+                    account_reference="Betfred-Existing",
+                    error_summary=f"Already registered: {clean_err or 'You may already have an account'}",
+                    screenshot_path=bundle.screenshot_path,
+                    dom_snapshot_path=bundle.dom_snapshot_path
+                )
+
             # Check for success indicators
             auth_indicators = [
                 'a:has-text("Deposit")', 'button:has-text("Deposit")',
@@ -249,7 +424,7 @@ class BetfredAdapter(BaseSiteAdapter):
                 except Exception:
                     continue
 
-            is_reg_open = page.locator('input[id*="password"]:visible, input[name*="password"]:visible').first.is_visible(timeout=1000)
+            is_reg_open = page.locator('h1:has-text("Join Us"):visible, [data-actionable*="RegistrationPage.PersonalSection"]:visible, [data-actionable*="RegistrationPage.ContactSection"]:visible, [data-actionable*="NavigationButtonsPage"]:visible').first.is_visible(timeout=1500)
 
             if has_auth or not is_reg_open:
                 log.info("Betfred registration confirmed successfully!")
@@ -283,6 +458,29 @@ class BetfredAdapter(BaseSiteAdapter):
 
         except Exception as e:
             log.error(f"Registration error on Betfred: {e}")
+            try:
+                raw_b = page.locator("body").inner_text()
+                body_txt = raw_b if isinstance(raw_b, str) else ""
+                if body_txt and (is_already_registered_error(body_txt) or "already have an account" in body_txt.lower() or "account set up with this" in body_txt.lower()):
+                    clean_err = extract_clean_error_message(body_txt)
+                    log.warning(f"⚠️ Betfred: Client {client.full_name} is ALREADY REGISTERED (caught in exception handler)")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.ALREADY_REGISTERED,
+                        email=client.email,
+                        password=password,
+                        account_reference="Betfred-Existing",
+                        error_summary=f"Already registered: {clean_err or 'It looks like you already have an account set up with this email address'}",
+                        screenshot_path=bundle.screenshot_path,
+                        dom_snapshot_path=bundle.dom_snapshot_path
+                    )
+            except Exception:
+                pass
+
             bundle = capture_failure_bundle(page, client.client_id, self.site_id, "registration_exception", e)
             return RegistrationResult(
                 client_id=client.client_id,
@@ -293,7 +491,8 @@ class BetfredAdapter(BaseSiteAdapter):
                 email=client.email,
                 password=password,
                 error_summary=str(e),
-                screenshot_path=bundle.screenshot_path
+                screenshot_path=bundle.screenshot_path,
+                dom_snapshot_path=bundle.dom_snapshot_path
             )
 
     def login(

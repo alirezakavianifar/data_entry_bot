@@ -223,7 +223,59 @@ class FairplayBetAdapter(BaseSiteAdapter):
         log.info("Submitting Step 3 registration form")
         if submit_btn.is_visible(timeout=3000):
             submit_btn.click(force=True)
-        # 8. Check for KYC Document Upload Modal ("More info needed")
+            page.wait_for_timeout(3000)
+
+        # 8. Check for Server Error Modal or Duplicate Account ("Looks like you're already registered")
+        error_modal = page.locator(
+            'div[role="dialog"]:visible, '
+            'div[class*="modal"]:visible, '
+            'div[class*="Modal"]:visible, '
+            'div[class*="Dialog"]:visible, '
+            'div[role="alert"]:visible, '
+            'div:has-text("already registered"):visible, '
+            'p:has-text("already registered"):visible, '
+            'h2:has-text("Error"):visible, '
+            'h3:has-text("Error"):visible, '
+            '.error-message:visible'
+        ).first
+        if error_modal.is_visible(timeout=3000):
+            raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
+            clean_err = extract_clean_error_message(raw_err_text)
+            is_duplicate = is_already_registered_error(raw_err_text) or "already registered" in raw_err_text.lower() or "looks like you" in raw_err_text.lower()
+
+            if is_duplicate:
+                log.warning(f"⚠️ Fairplay Bet: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
+                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                return RegistrationResult(
+                    client_id=client.client_id,
+                    client_name=client.full_name,
+                    site_id=self.site_id,
+                    site_name=self.site_name,
+                    status=RegistrationStatus.ALREADY_REGISTERED,
+                    email=client.email,
+                    password=password,
+                    account_reference="FairplayBet-Existing",
+                    error_summary=f"Already registered: {clean_err or 'Looks like you are already registered'}",
+                    screenshot_path=bundle.screenshot_path,
+                    dom_snapshot_path=bundle.dom_snapshot_path
+                )
+            else:
+                log.warning(f"Fairplay Bet registration error returned by server: {clean_err}")
+                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(clean_err))
+                return RegistrationResult(
+                    client_id=client.client_id,
+                    client_name=client.full_name,
+                    site_id=self.site_id,
+                    site_name=self.site_name,
+                    status=RegistrationStatus.FAILED,
+                    email=client.email,
+                    password=password,
+                    error_summary=clean_err,
+                    screenshot_path=bundle.screenshot_path,
+                    dom_snapshot_path=bundle.dom_snapshot_path
+                )
+
+        # 9. Check for KYC Document Upload Modal ("More info needed")
         kyc_modal = page.locator(
             'div:has-text("More info needed"):visible, '
             'h1:has-text("More info needed"):visible, '
@@ -260,44 +312,6 @@ class FairplayBetAdapter(BaseSiteAdapter):
                 dom_snapshot_path=kyc_bundle.dom_snapshot_path
             )
 
-        # 9. Check for Server Error Modal or Duplicate Account
-        error_modal = page.locator('div[role="alert"]:visible, div:has-text("Error"):visible, .error-message:visible').first
-        if error_modal.is_visible(timeout=2000):
-            raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
-            clean_err = extract_clean_error_message(raw_err_text)
-            is_duplicate = is_already_registered_error(raw_err_text)
-
-            if is_duplicate:
-                log.warning(f"⚠️ Fairplay Bet: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
-                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
-                return RegistrationResult(
-                    client_id=client.client_id,
-                    client_name=client.full_name,
-                    site_id=self.site_id,
-                    site_name=self.site_name,
-                    status=RegistrationStatus.ALREADY_REGISTERED,
-                    email=client.email,
-                    password=password,
-                    error_summary=f"Already registered: {clean_err}",
-                    screenshot_path=bundle.screenshot_path,
-                    dom_snapshot_path=bundle.dom_snapshot_path
-                )
-            else:
-                log.warning(f"Fairplay Bet registration error returned by server: {clean_err}")
-                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(clean_err))
-                return RegistrationResult(
-                    client_id=client.client_id,
-                    client_name=client.full_name,
-                    site_id=self.site_id,
-                    site_name=self.site_name,
-                    status=RegistrationStatus.FAILED,
-                    email=client.email,
-                    password=password,
-                    error_summary=clean_err,
-                    screenshot_path=bundle.screenshot_path,
-                    dom_snapshot_path=bundle.dom_snapshot_path
-                )
-
         # 10. Verify Result
         auth_indicators = [
             'a:has-text("Deposit")', 'button:has-text("Deposit")',
@@ -332,6 +346,30 @@ class FairplayBetAdapter(BaseSiteAdapter):
                 screenshot_path=success_shot
             )
 
+        # 11. Final Safety Scan: Check if "already registered" modal/message is present anywhere on page
+        body_text = ""
+        try:
+            body_text = page.locator("body").inner_text()
+        except Exception:
+            pass
+
+        if is_already_registered_error(body_text) or "looks like you're already registered" in body_text.lower():
+            clean_err = extract_clean_error_message(body_text)
+            log.warning(f"⚠️ Fairplay Bet: Client {client.full_name} is ALREADY REGISTERED (detected via page scan)")
+            bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+            return RegistrationResult(
+                client_id=client.client_id,
+                client_name=client.full_name,
+                site_id=self.site_id,
+                site_name=self.site_name,
+                status=RegistrationStatus.ALREADY_REGISTERED,
+                email=client.email,
+                password=password,
+                account_reference="FairplayBet-Existing",
+                error_summary=f"Already registered: {clean_err or 'Looks like you are already registered'}",
+                screenshot_path=bundle.screenshot_path,
+                dom_snapshot_path=bundle.dom_snapshot_path
+            )
 
         # Fallback failure capture
         bundle = capture_failure_bundle(page, client.client_id, self.site_id, "verify_submission")
