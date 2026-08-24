@@ -255,65 +255,111 @@ class QuinnbetAdapter(BaseSiteAdapter):
                 if finish_btn.is_visible(timeout=2000):
                     log.info("Clicking FINISH button on Step 3")
                     finish_btn.click(force=True)
-                    page.wait_for_timeout(5000)
+                    page.wait_for_timeout(2000)
 
-            # Check for error message in registration
-            error_modal = page.locator('app-register .alert:visible, app-register .error:visible, mat-error:visible, div[role="alert"]:visible').first
-            if error_modal.is_visible(timeout=1500):
-                raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
-                clean_err = extract_clean_error_message(raw_err_text)
-                is_duplicate = is_already_registered_error(raw_err_text)
+            # Polling Loop (up to 30s) to wait for in-platform auto-verification & dismiss deposit limit modal
+            log.info("Waiting for QuinnBet in-platform auto-verification & confirmation (up to 30s)...")
+            max_poll_sec = 30
+            is_confirmed = False
+            auto_verified_banner = False
 
-                if is_duplicate:
-                    log.warning(f"[DUPLICATE] QuinnBet: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
-                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
-                    return RegistrationResult(
-                        client_id=client.client_id,
-                        client_name=client.full_name,
-                        site_id=self.site_id,
-                        site_name=self.site_name,
-                        status=RegistrationStatus.ALREADY_REGISTERED,
-                        email=client.email,
-                        password=password,
-                        error_summary=f"Already registered: {clean_err}",
-                        screenshot_path=bundle.screenshot_path,
-                        dom_snapshot_path=bundle.dom_snapshot_path
-                    )
-                else:
-                    log.warning(f"QuinnBet registration rejected: {clean_err}")
-                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(clean_err))
-                    return RegistrationResult(
-                        client_id=client.client_id,
-                        client_name=client.full_name,
-                        site_id=self.site_id,
-                        site_name=self.site_name,
-                        status=RegistrationStatus.FAILED,
-                        email=client.email,
-                        password=password,
-                        error_summary=clean_err,
-                        screenshot_path=bundle.screenshot_path,
-                        dom_snapshot_path=bundle.dom_snapshot_path
-                    )
+            for sec in range(1, max_poll_sec + 1):
+                # 1. Check for duplicate / already registered error message
+                error_modal = page.locator('app-register .alert:visible, app-register .error:visible, mat-error:visible, div[role="alert"]:visible').first
+                if error_modal.is_visible(timeout=500):
+                    raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
+                    clean_err = extract_clean_error_message(raw_err_text)
+                    is_duplicate = is_already_registered_error(raw_err_text)
 
-            auth_indicators = [
-                'a:has-text("Deposit")', 'button:has-text("Deposit")',
-                'a:has-text("My Account")', 'button:has-text("My Account")',
-                '[data-testid*="user-menu"]', '[data-testid*="balance"]',
-                '.user-balance', '.account-balance', '[class*="deposit-modal"]'
-            ]
-            has_auth = False
-            for selector in auth_indicators:
-                try:
-                    if page.locator(selector).first.is_visible(timeout=1500):
-                        has_auth = True
-                        break
-                except Exception:
-                    continue
+                    if is_duplicate:
+                        log.warning(f"[DUPLICATE] QuinnBet: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
+                        bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                        return RegistrationResult(
+                            client_id=client.client_id,
+                            client_name=client.full_name,
+                            site_id=self.site_id,
+                            site_name=self.site_name,
+                            status=RegistrationStatus.ALREADY_REGISTERED,
+                            email=client.email,
+                            password=password,
+                            account_reference="QuinnBet-Existing",
+                            error_summary=f"Already registered: {clean_err}",
+                            screenshot_path=bundle.screenshot_path,
+                            dom_snapshot_path=bundle.dom_snapshot_path
+                        )
+                    else:
+                        log.warning(f"QuinnBet registration rejected: {clean_err}")
+                        bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(clean_err))
+                        return RegistrationResult(
+                            client_id=client.client_id,
+                            client_name=client.full_name,
+                            site_id=self.site_id,
+                            site_name=self.site_name,
+                            status=RegistrationStatus.FAILED,
+                            email=client.email,
+                            password=password,
+                            error_summary=clean_err,
+                            screenshot_path=bundle.screenshot_path,
+                            dom_snapshot_path=bundle.dom_snapshot_path
+                        )
 
-            is_reg_open = page.locator('app-register:visible, input[name="email"]:visible').first.is_visible(timeout=1000)
+                # 2. Check and auto-dismiss Net Deposit Limit popup
+                deposit_limit_dismiss = page.locator('button:has-text("NO, MAYBE LATER"), button:has-text("No, Maybe Later"), button:has-text("NO, THANKS"), button:has-text("No thanks"), button:has-text("MAYBE LATER")').first
+                if deposit_limit_dismiss.is_visible(timeout=500):
+                    try:
+                        log.info("Dismissing 'Set your Net Deposit limit' modal on QuinnBet")
+                        deposit_limit_dismiss.click(force=True)
+                        page.wait_for_timeout(1000)
+                    except Exception:
+                        pass
 
-            if has_auth and not is_reg_open:
-                log.info("QuinnBet registration confirmed successfully!")
+                # 3. Check for auto-verification confirmation banner
+                verif_toast = page.locator(':has-text("auto-verification was successfully completed"), :has-text("auto-verification completed"), :has-text("Great news! Your auto-verification")').first
+                if verif_toast.is_visible(timeout=500):
+                    log.info(f"QuinnBet in-platform auto-verification banner confirmed at {sec}s!")
+                    auto_verified_banner = True
+                    is_confirmed = True
+                    break
+
+                # 4. Check for genuine authenticated session indicators
+                auth_indicators = [
+                    'button:has-text("DEPOSIT")', 'a:has-text("DEPOSIT")',
+                    'a:has-text("Deposit")', 'button:has-text("Deposit")',
+                    'a:has-text("My Account")', 'button:has-text("My Account")',
+                    '[data-testid*="user-menu"]', '[data-testid*="balance"]',
+                    '.user-balance', '.account-balance', '[class*="deposit-modal"]'
+                ]
+                has_auth = False
+                for selector in auth_indicators:
+                    try:
+                        if page.locator(selector).first.is_visible(timeout=300):
+                            has_auth = True
+                            break
+                    except Exception:
+                        continue
+
+                is_reg_open = page.locator('app-register:visible, input[name="email"]:visible').first.is_visible(timeout=300)
+
+                if has_auth and not is_reg_open:
+                    log.info(f"QuinnBet session indicators confirmed at {sec}s!")
+                    is_confirmed = True
+                    break
+
+                page.wait_for_timeout(1000)
+
+            # Final check and dismiss any remaining dialogs
+            try:
+                page.evaluate("""() => {
+                    const dismissBtns = Array.from(document.querySelectorAll('button')).filter(b => 
+                        b.innerText && (b.innerText.includes('NO, MAYBE LATER') || b.innerText.includes('MAYBE LATER') || b.innerText.includes('No thanks'))
+                    );
+                    dismissBtns.forEach(b => b.click());
+                }""")
+            except Exception:
+                pass
+
+            if is_confirmed or auto_verified_banner:
+                log.info("QuinnBet registration & auto-verification confirmed successfully!")
                 success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
                 return RegistrationResult(
                     client_id=client.client_id,
@@ -324,12 +370,12 @@ class QuinnbetAdapter(BaseSiteAdapter):
                     email=client.email,
                     username=client.email,
                     password=password,
-                    account_reference="QuinnBet-Direct",
+                    account_reference="QuinnBet-Direct (Auto-Verified)",
                     screenshot_path=success_shot
                 )
             else:
                 bundle = capture_failure_bundle(page, client.client_id, self.site_id, "verify_submission")
-                log.warning("QuinnBet registration submission could not be confirmed")
+                log.warning("QuinnBet registration submission could not be confirmed within 30s")
                 return RegistrationResult(
                     client_id=client.client_id,
                     client_name=client.full_name,
@@ -338,7 +384,7 @@ class QuinnbetAdapter(BaseSiteAdapter):
                     status=RegistrationStatus.FAILED,
                     email=client.email,
                     password=password,
-                    error_summary="Registration was not confirmed by QuinnBet",
+                    error_summary="Registration was not confirmed by QuinnBet within 30s",
                     screenshot_path=bundle.screenshot_path
                 )
 
@@ -406,12 +452,22 @@ class QuinnbetAdapter(BaseSiteAdapter):
             else:
                 pwd_inp.press("Enter")
 
-            page.wait_for_timeout(5000)
+            page.wait_for_timeout(3000)
+
+            # Check and auto-dismiss Net Deposit Limit popup if triggered upon login
+            deposit_limit_dismiss = page.locator('button:has-text("NO, MAYBE LATER"), button:has-text("No, Maybe Later"), button:has-text("NO, THANKS"), button:has-text("No thanks"), button:has-text("MAYBE LATER")').first
+            if deposit_limit_dismiss.is_visible(timeout=1500):
+                try:
+                    log.info("Dismissing 'Set your Net Deposit limit' modal post-login on QuinnBet")
+                    deposit_limit_dismiss.click(force=True)
+                    page.wait_for_timeout(1000)
+                except Exception:
+                    pass
 
             proof_path = capture_login_proof_screenshot(page, cid, self.site_id)
 
             # Check if login modal is still present
-            login_modal = page.locator("app-login, .login-modal, .loginModal").first
+            login_modal = page.locator("app-login input#txtPassword, app-login button:has-text('LOG IN')").first
             is_modal_open = False
             try:
                 if login_modal.is_visible(timeout=1500):
@@ -420,6 +476,7 @@ class QuinnbetAdapter(BaseSiteAdapter):
                 pass
 
             auth_indicators = [
+                'button:has-text("DEPOSIT")', 'a:has-text("DEPOSIT")',
                 'a:has-text("Deposit")', 'button:has-text("Deposit")',
                 'a:has-text("My Account")', 'button:has-text("My Account")',
                 '[data-testid*="user-menu"]', '[data-testid*="balance"]',
@@ -440,7 +497,7 @@ class QuinnbetAdapter(BaseSiteAdapter):
             if err_el.is_visible(timeout=1000):
                 err_msg = err_el.inner_text().strip().replace("\n", " - ")
 
-            if is_authenticated and not is_modal_open and not err_msg:
+            if (is_authenticated or not is_modal_open) and not err_msg:
                 log.info(f"QuinnBet login successfully verified! Proof: {proof_path}")
                 return True, proof_path, None
             else:

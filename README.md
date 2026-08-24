@@ -214,6 +214,13 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
+### 3. Google Sheets Setup (Optional)
+To use a live Google Sheet instead of local Excel:
+1. Follow the comprehensive walkthrough in **[`GOOGLE_SHEETS_SETUP_GUIDE.md`](GOOGLE_SHEETS_SETUP_GUIDE.md)** to generate your `credentials.json` service account key.
+2. Place `credentials.json` in the application root directory.
+3. Share your Google Spreadsheet with the service account email (with **Editor** permissions).
+4. Select **Google Sheets** in the desktop GUI and paste your sheet URL.
+
 ---
 
 ## Diagnostic Logs & Troubleshooting
@@ -224,6 +231,39 @@ playwright install chromium
   - High-res logged-in proof: `<timestamp>_<client>_<site>_LOGIN_PROOF.png`
   - When any step fails: `<timestamp>_<client>_<site>_<step>.png` and `.html` DOM snapshot.
   - Open traces: `playwright show-trace logs/artifacts/<trace_file>.zip`.
+
+---
+
+## Standalone Executable (.exe) & Portable Distribution
+
+The repository includes an automated PowerShell build script (`scripts/build-standalone.ps1`) to compile the entire Data Entry Bot into a single standalone `.exe` that can be copied and run on any other Windows PC without installing Python, Git, or dependencies.
+
+### 1. Build Single Standalone Executable
+To compile `dist/DataEntryBot.exe`:
+```powershell
+.\scripts\build-standalone.ps1 -Clean
+```
+
+### 2. Build with Portable ZIP Archive
+To compile the `.exe` and package it into `DataEntryBot-Portable.zip` with sample files and documentation:
+```powershell
+.\scripts\build-standalone.ps1 -Clean -CreateZip
+```
+
+### 3. Build with Offline Bundled Browser
+To package Playwright's Chromium browser binaries directly inside the distribution folder (`dist/browsers`) for 100% offline environments without internet access:
+```powershell
+.\scripts\build-standalone.ps1 -Clean -BundleBrowser -CreateZip
+```
+
+### 4. Running on Another PC
+1. Copy `dist/DataEntryBot.exe` (or extract `DataEntryBot-Portable.zip`) onto the target Windows PC.
+2. Double-click **`DataEntryBot.exe`** to launch the GUI.
+3. **Browser Execution:**
+   - The standalone executable automatically connects to host **Google Chrome** or **Microsoft Edge**.
+   - If no browser is installed, it will automatically download its internal Chromium engine on first launch.
+4. **Data Persistence:**
+   - The SQLite database (`state.db`), logs (`logs/`), screenshots, and custom promo configuration (`config/promo_links.json`) are automatically persisted in the folder alongside the `.exe`.
 
 ---
 

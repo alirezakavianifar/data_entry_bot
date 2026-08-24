@@ -326,8 +326,8 @@ class BaseSiteAdapter(ABC):
             # 5. Wait for authentication response & state transition
             page.wait_for_timeout(5000)
 
-            # 6. Check for dismissible welcome / KYC dialogs post-login
-            dismiss_btn = page.locator('button:has-text("Dismiss"), button:has-text("Later"), button:has-text("Maybe Later"), button:has-text("Close"), button[aria-label="Close"], [class*="modal"] button[class*="close"]').first
+            # 6. Check for dismissible welcome / KYC / Deposit limit dialogs post-login
+            dismiss_btn = page.locator('button:has-text("NO, MAYBE LATER"), button:has-text("No, Maybe Later"), button:has-text("NO, THANKS"), button:has-text("No thanks"), button:has-text("Dismiss"), button:has-text("Later"), button:has-text("Maybe Later"), button:has-text("Close"), button[aria-label="Close"], [class*="modal"] button[class*="close"]').first
             if dismiss_btn.is_visible(timeout=2000):
                 try:
                     dismiss_btn.click(force=True)
@@ -346,6 +346,7 @@ class BaseSiteAdapter(ABC):
 
             # 8. Check for authentic post-login user widgets
             logged_in_indicators = [
+                'button:has-text("DEPOSIT")', 'a:has-text("DEPOSIT")',
                 'a:has-text("Deposit")', 'button:has-text("Deposit")',
                 'button:has-text("Log Out")', 'a:has-text("Log Out")',
                 'button:has-text("Logout")', 'a:has-text("Logout")',

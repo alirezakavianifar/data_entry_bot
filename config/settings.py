@@ -1,9 +1,18 @@
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Base Directory
-BASE_DIR = Path(__file__).resolve().parent.parent
+# Base Directory (handle PyInstaller frozen mode)
+if getattr(sys, "frozen", False):
+    BASE_DIR = Path(sys.executable).resolve().parent
+else:
+    BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Check for local bundled browsers directory next to the executable
+LOCAL_BROWSERS_DIR = BASE_DIR / "browsers"
+if LOCAL_BROWSERS_DIR.exists() and "PLAYWRIGHT_BROWSERS_PATH" not in os.environ:
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(LOCAL_BROWSERS_DIR)
 
 # Load environment variables
 load_dotenv(BASE_DIR / ".env")

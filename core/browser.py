@@ -26,22 +26,64 @@ class BrowserManager:
             ]
             if not self.headless:
                 launch_args.append("--start-maximized")
-            try:
-                # Try system Chrome first on Windows
-                self._browser = self._playwright.chromium.launch(
+
+            # Multi-tier launch strategy:
+            # 1. Default Chromium (Playwright bundled or local ms-playwright)
+            # 2. System Chrome
+            # 3. System Microsoft Edge
+            launch_strategies = [
+                ("default_chromium", lambda: self._playwright.chromium.launch(
+                    headless=self.headless,
+                    slow_mo=self.slow_mo_ms,
+                    args=launch_args
+                )),
+                ("system_chrome", lambda: self._playwright.chromium.launch(
                     channel="chrome",
                     headless=self.headless,
                     slow_mo=self.slow_mo_ms,
                     args=launch_args
-                )
-                logger.info(f"Launched Chromium (Channel: Chrome, Headless: {self.headless}, Maximized: {not self.headless})")
-            except Exception as e:
-                logger.warning(f"System Chrome launch failed ({e}); falling back to default Chromium executable")
-                self._browser = self._playwright.chromium.launch(
+                )),
+                ("system_msedge", lambda: self._playwright.chromium.launch(
+                    channel="msedge",
                     headless=self.headless,
                     slow_mo=self.slow_mo_ms,
                     args=launch_args
-                )
+                )),
+            ]
+
+            last_error = None
+            for strategy_name, launcher in launch_strategies:
+                try:
+                    self._browser = launcher()
+                    logger.info(f"Launched browser via strategy '{strategy_name}' (Headless: {self.headless}, Maximized: {not self.headless})")
+                    return
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"Browser launch strategy '{strategy_name}' failed: {e}")
+
+            # Auto-install fallback if no browser was found
+            logger.info("Attempting automated Playwright Chromium installation...")
+            try:
+                import subprocess
+                from playwright._impl._driver import compute_driver_executable
+                node_exec, cli_path = compute_driver_executable()
+                res = subprocess.run([node_exec, cli_path, "install", "chromium"], capture_output=True, text=True, timeout=180)
+                if res.returncode == 0:
+                    logger.info("Playwright Chromium installed successfully. Retrying browser launch...")
+                    self._browser = self._playwright.chromium.launch(
+                        headless=self.headless,
+                        slow_mo=self.slow_mo_ms,
+                        args=launch_args
+                    )
+                    logger.info("Launched newly installed Playwright Chromium browser")
+                    return
+                else:
+                    logger.warning(f"Playwright auto-install returned code {res.returncode}: {res.stderr}")
+            except Exception as install_err:
+                logger.error(f"Automated browser installation failed: {install_err}")
+
+            if not self._browser:
+                raise RuntimeError(f"Unable to launch any browser engine (Chromium/Chrome/Edge). Error: {last_error}")
 
     def new_context(self, trace_name: Optional[str] = None) -> BrowserContext:
         if not self._browser:

@@ -225,78 +225,132 @@ class FairplayBetAdapter(BaseSiteAdapter):
             submit_btn.click(force=True)
             page.wait_for_timeout(3000)
 
-        # 8. Check for Server Error Modal or Duplicate Account ("Looks like you're already registered")
-        error_modal = page.locator(
-            'div[role="dialog"]:visible, '
-            'div[class*="modal"]:visible, '
-            'div[class*="Modal"]:visible, '
-            'div[class*="Dialog"]:visible, '
-            'div[role="alert"]:visible, '
-            'div:has-text("already registered"):visible, '
-            'p:has-text("already registered"):visible, '
-            'h2:has-text("Error"):visible, '
-            'h3:has-text("Error"):visible, '
-            '.error-message:visible'
-        ).first
-        if error_modal.is_visible(timeout=3000):
-            raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
-            clean_err = extract_clean_error_message(raw_err_text)
-            is_duplicate = is_already_registered_error(raw_err_text) or "already registered" in raw_err_text.lower() or "looks like you" in raw_err_text.lower()
+        # 8. Polling Loop (up to 30s) to wait for "Please wait while we verify your details" spinner & confirmation
+        log.info("Waiting for Fairplay Bet in-platform verification & confirmation (up to 30s)...")
+        max_poll_sec = 30
+        is_confirmed = False
+        email_verif_needed = False
+        kyc_needed = False
+        kyc_bundle = None
 
-            if is_duplicate:
-                log.warning(f"⚠️ Fairplay Bet: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
-                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
-                return RegistrationResult(
-                    client_id=client.client_id,
-                    client_name=client.full_name,
-                    site_id=self.site_id,
-                    site_name=self.site_name,
-                    status=RegistrationStatus.ALREADY_REGISTERED,
-                    email=client.email,
-                    password=password,
-                    account_reference="FairplayBet-Existing",
-                    error_summary=f"Already registered: {clean_err or 'Looks like you are already registered'}",
-                    screenshot_path=bundle.screenshot_path,
-                    dom_snapshot_path=bundle.dom_snapshot_path
-                )
-            else:
-                log.warning(f"Fairplay Bet registration error returned by server: {clean_err}")
-                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(clean_err))
-                return RegistrationResult(
-                    client_id=client.client_id,
-                    client_name=client.full_name,
-                    site_id=self.site_id,
-                    site_name=self.site_name,
-                    status=RegistrationStatus.FAILED,
-                    email=client.email,
-                    password=password,
-                    error_summary=clean_err,
-                    screenshot_path=bundle.screenshot_path,
-                    dom_snapshot_path=bundle.dom_snapshot_path
-                )
+        for sec in range(1, max_poll_sec + 1):
+            # A. Check for duplicate / server error modal
+            error_modal = page.locator(
+                'div[role="dialog"]:visible, '
+                'div[class*="modal"]:visible, '
+                'div[class*="Modal"]:visible, '
+                'div[class*="Dialog"]:visible, '
+                'div[role="alert"]:visible, '
+                'div:has-text("already registered"):visible, '
+                'p:has-text("already registered"):visible, '
+                'h2:has-text("Error"):visible, '
+                'h3:has-text("Error"):visible, '
+                '.error-message:visible'
+            ).first
 
-        # 9. Check for KYC Document Upload Modal ("More info needed")
-        kyc_modal = page.locator(
-            'div:has-text("More info needed"):visible, '
-            'h1:has-text("More info needed"):visible, '
-            'h2:has-text("More info needed"):visible, '
-            'h3:has-text("More info needed"):visible, '
-            'div:has-text("electoral roll"):visible, '
-            'div:has-text("Proof of ID"):visible'
-        ).first
-        if kyc_modal.is_visible(timeout=2500):
-            log.warning(f"⚠️ Fairplay Bet: Account created for {client.full_name} ({client.email}), but manual KYC document upload is required.")
-            kyc_bundle = capture_failure_bundle(page, client.client_id, self.site_id, "kyc_required")
+            if error_modal.is_visible(timeout=300):
+                raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
+                clean_err = extract_clean_error_message(raw_err_text)
+                is_duplicate = is_already_registered_error(raw_err_text) or "already registered" in raw_err_text.lower() or "looks like you" in raw_err_text.lower()
 
-            # Attempt to click close '✕' button if present
-            close_btn = page.locator('button:has-text("✕"), button:has-text("×"), button[aria-label="Close"], button[class*="close"]').first
-            if close_btn.is_visible(timeout=1500):
+                if is_duplicate:
+                    log.warning(f"⚠️ Fairplay Bet: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.ALREADY_REGISTERED,
+                        email=client.email,
+                        password=password,
+                        account_reference="FairplayBet-Existing",
+                        error_summary=f"Already registered: {clean_err or 'Looks like you are already registered'}",
+                        screenshot_path=bundle.screenshot_path,
+                        dom_snapshot_path=bundle.dom_snapshot_path
+                    )
+                elif any(k in raw_err_text.lower() for k in ("invalid", "rejected", "error", "failed")):
+                    log.warning(f"Fairplay Bet registration error returned by server: {clean_err}")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(clean_err))
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.FAILED,
+                        email=client.email,
+                        password=password,
+                        error_summary=clean_err,
+                        screenshot_path=bundle.screenshot_path,
+                        dom_snapshot_path=bundle.dom_snapshot_path
+                    )
+
+            # B. Check for KYC Document Upload Modal ("More info needed")
+            kyc_modal = page.locator(
+                'div:has-text("More info needed"):visible, '
+                'h1:has-text("More info needed"):visible, '
+                'h2:has-text("More info needed"):visible, '
+                'h3:has-text("More info needed"):visible, '
+                'div:has-text("electoral roll"):visible, '
+                'div:has-text("Proof of ID"):visible'
+            ).first
+            if kyc_modal.is_visible(timeout=300):
+                log.warning(f"⚠️ Fairplay Bet: Account created for {client.full_name} ({client.email}), but manual KYC document upload is required.")
+                kyc_needed = True
+                kyc_bundle = capture_failure_bundle(page, client.client_id, self.site_id, "kyc_required")
+                break
+
+            # C. Check for Email Verification prompt (Client confirmed Fairplay requires email verification)
+            email_prompt = page.locator(
+                ':has-text("Verify your email"):visible, '
+                ':has-text("check your email"):visible, '
+                ':has-text("activation link"):visible, '
+                ':has-text("verification email"):visible, '
+                ':has-text("Please verify your email"):visible, '
+                'h1:has-text("Verify"):visible, '
+                'h2:has-text("Verify"):visible'
+            ).first
+            if email_prompt.is_visible(timeout=300):
+                log.info(f"Fairplay Bet email verification prompt confirmed at {sec}s!")
+                email_verif_needed = True
+                is_confirmed = True
+                break
+
+            # D. Check if verification spinner is still active ("Please wait while we verify your details")
+            spinner = page.locator(':has-text("Please wait while we verify your details"), :has-text("verify your details")').first
+            if spinner.is_visible(timeout=300):
+                if sec % 5 == 0:
+                    log.info(f"Fairplay Bet verification spinner still processing ({sec}/{max_poll_sec}s)...")
+                page.wait_for_timeout(1000)
+                continue
+
+            # E. Check for authenticated state indicators
+            auth_indicators = [
+                'button:has-text("Deposit")', 'a:has-text("Deposit")',
+                'button:has-text("DEPOSIT")', 'a:has-text("DEPOSIT")',
+                'a:has-text("My Account")', 'button:has-text("My Account")',
+                'button:has-text("Logout")', 'a:has-text("Logout")',
+                '.user-balance', '.account-balance', '[class*="deposit-modal"]'
+            ]
+            has_auth = False
+            for selector in auth_indicators:
                 try:
-                    close_btn.click(force=True)
-                    page.wait_for_timeout(1000)
+                    if page.locator(selector).first.is_visible(timeout=300):
+                        has_auth = True
+                        break
                 except Exception:
-                    pass
+                    continue
 
+            is_drawer_inputs_open = page.locator('form input#firstName, form input#email, input#confirmPassword').first.is_visible(timeout=300)
+
+            if has_auth and not is_drawer_inputs_open:
+                log.info(f"Fairplay Bet session confirmed at {sec}s!")
+                is_confirmed = True
+                break
+
+            page.wait_for_timeout(1000)
+
+        if kyc_needed:
             return RegistrationResult(
                 client_id=client.client_id,
                 client_name=client.full_name,
@@ -308,31 +362,15 @@ class FairplayBetAdapter(BaseSiteAdapter):
                 password=password,
                 account_reference="FairplayBet-KYC-Review",
                 error_summary="Account created; KYC document upload required (Proof of ID & Address)",
-                screenshot_path=kyc_bundle.screenshot_path,
-                dom_snapshot_path=kyc_bundle.dom_snapshot_path
+                screenshot_path=kyc_bundle.screenshot_path if kyc_bundle else None,
+                dom_snapshot_path=kyc_bundle.dom_snapshot_path if kyc_bundle else None
             )
 
-        # 10. Verify Result
-        auth_indicators = [
-            'a:has-text("Deposit")', 'button:has-text("Deposit")',
-            'a:has-text("My Account")', 'button:has-text("My Account")',
-            '.user-balance', '.account-balance', '[class*="deposit-modal"]'
-        ]
-        has_auth = False
-        for selector in auth_indicators:
-            try:
-                if page.locator(selector).first.is_visible(timeout=1500):
-                    has_auth = True
-                    break
-            except Exception:
-                continue
-
-        # Check if registration drawer closed
-        is_drawer_open = page.locator('form input#firstName, form input#email, input#confirmPassword').first.is_visible(timeout=1500)
-
-        if has_auth and not is_drawer_open:
+        if is_confirmed or email_verif_needed:
             log.info("Fairplay Bet registration confirmed successfully!")
             success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
+            ref_label = "FairplayBet (Email Verification Required)" if email_verif_needed else "FairplayBet-Direct"
+            summary_label = "✉️ Email activation link sent - client must verify email" if email_verif_needed else None
             return RegistrationResult(
                 client_id=client.client_id,
                 client_name=client.full_name,
@@ -342,11 +380,12 @@ class FairplayBetAdapter(BaseSiteAdapter):
                 email=client.email,
                 username=client.email,
                 password=password,
-                account_reference="FairplayBet-Direct",
+                account_reference=ref_label,
+                error_summary=summary_label,
                 screenshot_path=success_shot
             )
 
-        # 11. Final Safety Scan: Check if "already registered" modal/message is present anywhere on page
+        # 9. Fallback Safety Scan: Check if "already registered" modal/message is present anywhere on page
         body_text = ""
         try:
             body_text = page.locator("body").inner_text()

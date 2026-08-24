@@ -329,24 +329,47 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                     dom_snapshot_path=bundle.dom_snapshot_path
                 )
 
-            # Authenticated indicators / Deposit modal
-            auth_indicators = [
-                'a:has-text("Deposit")', 'button:has-text("Deposit")',
-                'a:has-text("My Account")', 'button:has-text("My Account")',
-                '.user-balance', '.account-balance', '[class*="deposit-modal"]'
-            ]
-            has_auth = False
-            for selector in auth_indicators:
-                try:
-                    if page.locator(selector).first.is_visible(timeout=1500):
-                        has_auth = True
-                        break
-                except Exception:
-                    continue
+            # Polling Loop (up to 30s) to wait for Betgoodwin registration confirmation & auto-verification
+            log.info("Waiting for Betgoodwin in-platform confirmation (up to 30s)...")
+            max_poll_sec = 30
+            is_confirmed = False
 
-            is_reg_open = page.locator('input[name="FirstnameOnDocument"]:visible, input[name="Email"]:visible').first.is_visible(timeout=1000)
+            for sec in range(1, max_poll_sec + 1):
+                # Check for dismissible deposit / safer gambling modal
+                dismiss_btn = page.locator('button:has-text("Later"), button:has-text("No thanks"), button:has-text("Close"), [aria-label="Close"], [class*="modal"] button[class*="close"]').first
+                if dismiss_btn.is_visible(timeout=300):
+                    try:
+                        dismiss_btn.click(force=True)
+                        page.wait_for_timeout(500)
+                    except Exception:
+                        pass
 
-            if has_auth or not is_reg_open:
+                # Authenticated indicators / Deposit modal
+                auth_indicators = [
+                    'a:has-text("Deposit")', 'button:has-text("Deposit")',
+                    'button:has-text("DEPOSIT")', 'a:has-text("DEPOSIT")',
+                    'a:has-text("My Account")', 'button:has-text("My Account")',
+                    '.user-balance', '.account-balance', '[class*="deposit-modal"]'
+                ]
+                has_auth = False
+                for selector in auth_indicators:
+                    try:
+                        if page.locator(selector).first.is_visible(timeout=300):
+                            has_auth = True
+                            break
+                    except Exception:
+                        continue
+
+                is_reg_open = page.locator('input[name="FirstnameOnDocument"]:visible, input[name="Email"]:visible').first.is_visible(timeout=300)
+
+                if has_auth or not is_reg_open:
+                    log.info(f"Betgoodwin registration confirmed at {sec}s!")
+                    is_confirmed = True
+                    break
+
+                page.wait_for_timeout(1000)
+
+            if is_confirmed:
                 log.info("Betgoodwin registration confirmed successfully!")
                 success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
                 return RegistrationResult(
@@ -372,7 +395,7 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                 status=RegistrationStatus.FAILED,
                 email=client.email,
                 password=password,
-                error_summary="Registration was not confirmed by Betgoodwin",
+                error_summary="Registration was not confirmed by Betgoodwin within 30s",
                 screenshot_path=bundle.screenshot_path
             )
 

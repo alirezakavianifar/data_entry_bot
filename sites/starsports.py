@@ -233,38 +233,58 @@ class StarSportsAdapter(BaseSiteAdapter):
                         dom_snapshot_path=bundle.dom_snapshot_path
                     )
 
-            # Handle Safer Gambling modal if present
-            safer_modal = page.locator('legend:has-text("SAFER GAMBLING"), h2:has-text("SAFER GAMBLING"), [data-test*="safer-gambling"]').first
-            if safer_modal.is_visible(timeout=3000):
-                log.info("Safer Gambling modal detected, progressing...")
-                ack_toggle = page.locator('span[class*="switch"], [role="switch"], label:has-text("deposit limit"), [class*="Switch"]').last
-                if ack_toggle.is_visible(timeout=1500):
-                    ack_toggle.click(force=True)
-                    page.wait_for_timeout(500)
-                next_btn = page.locator('button:has-text("Next"), button:has-text("NEXT"), button[data-test*="next"]').first
-                if next_btn.is_visible(timeout=2000):
-                    next_btn.click(force=True)
-                    page.wait_for_timeout(4000)
+            # 5. Polling Loop (up to 30s) to wait for Star Sports registration confirmation & auto-verification
+            log.info("Waiting for Star Sports in-platform confirmation (up to 30s)...")
+            max_poll_sec = 30
+            is_confirmed = False
 
-            auth_indicators = [
-                'a:has-text("Deposit")', 'button:has-text("Deposit")',
-                'a:has-text("My Account")', 'button:has-text("My Account")',
-                '[data-component="AccountNavigation"] [data-test*="account"]',
-                '.user-balance', '[class*="deposit-modal"]', 'h1:has-text("SAFER GAMBLING")'
-            ]
-            has_auth = False
-            for selector in auth_indicators:
-                try:
-                    if page.locator(selector).first.is_visible(timeout=1500):
-                        has_auth = True
-                        break
-                except Exception:
-                    continue
+            for sec in range(1, max_poll_sec + 1):
+                # Handle Safer Gambling modal if present
+                safer_modal = page.locator('legend:has-text("SAFER GAMBLING"), h2:has-text("SAFER GAMBLING"), [data-test*="safer-gambling"]').first
+                if safer_modal.is_visible(timeout=500):
+                    log.info("Safer Gambling modal detected, progressing...")
+                    ack_toggle = page.locator('span[class*="switch"], [role="switch"], label:has-text("deposit limit"), [class*="Switch"]').last
+                    if ack_toggle.is_visible(timeout=500):
+                        try:
+                            ack_toggle.click(force=True)
+                            page.wait_for_timeout(300)
+                        except Exception:
+                            pass
+                    next_btn = page.locator('button:has-text("Next"), button:has-text("NEXT"), button[data-test*="next"]').first
+                    if next_btn.is_visible(timeout=1000):
+                        try:
+                            next_btn.click(force=True)
+                            page.wait_for_timeout(1000)
+                        except Exception:
+                            pass
 
-            # Check if signup form is still open
-            agree_still_open = page.locator('button[data-test="agree-and-join-button"]:visible').first.is_visible(timeout=1000)
+                auth_indicators = [
+                    'a:has-text("Deposit")', 'button:has-text("Deposit")',
+                    'button:has-text("DEPOSIT")', 'a:has-text("DEPOSIT")',
+                    'a:has-text("My Account")', 'button:has-text("My Account")',
+                    '[data-component="AccountNavigation"] [data-test*="account"]',
+                    '.user-balance', '[class*="deposit-modal"]', 'h1:has-text("SAFER GAMBLING")'
+                ]
+                has_auth = False
+                for selector in auth_indicators:
+                    try:
+                        if page.locator(selector).first.is_visible(timeout=300):
+                            has_auth = True
+                            break
+                    except Exception:
+                        continue
 
-            if (has_auth or not agree_still_open):
+                # Check if signup form is still open
+                agree_still_open = page.locator('button[data-test="agree-and-join-button"]:visible').first.is_visible(timeout=300)
+
+                if has_auth or not agree_still_open:
+                    log.info(f"Star Sports registration confirmed at {sec}s!")
+                    is_confirmed = True
+                    break
+
+                page.wait_for_timeout(1000)
+
+            if is_confirmed:
                 log.info("Star Sports registration confirmed successfully!")
                 success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
                 return RegistrationResult(
@@ -281,7 +301,7 @@ class StarSportsAdapter(BaseSiteAdapter):
                 )
             else:
                 bundle = capture_failure_bundle(page, client.client_id, self.site_id, "verify_submission")
-                log.warning("Star Sports submission could not be confirmed")
+                log.warning("Star Sports submission could not be confirmed within 30s")
                 return RegistrationResult(
                     client_id=client.client_id,
                     client_name=client.full_name,
@@ -290,7 +310,7 @@ class StarSportsAdapter(BaseSiteAdapter):
                     status=RegistrationStatus.FAILED,
                     email=client.email,
                     password=password,
-                    error_summary="Registration submission was not confirmed by site",
+                    error_summary="Registration submission was not confirmed by site within 30s",
                     screenshot_path=bundle.screenshot_path
                 )
 

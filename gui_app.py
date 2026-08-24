@@ -35,7 +35,12 @@ def ensure_single_instance():
 from gui.main_gui import run_gui
 
 if __name__ == "__main__":
-    _instance_lock = ensure_single_instance()
-    run_gui()
+    cli_flags = {"--cli", "--source", "--input", "--sheet-url", "--headed", "--headless", "--limit", "--client-id", "--sites", "--dry-run", "--trace", "--retry-failed"}
+    if any(arg in cli_flags for arg in sys.argv[1:]) or (len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help")):
+        from app import main as cli_main
+        cli_main()
+    else:
+        _instance_lock = ensure_single_instance()
+        run_gui()
 
 

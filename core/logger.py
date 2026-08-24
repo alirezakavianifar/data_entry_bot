@@ -10,14 +10,15 @@ from config.settings import LOGS_DIR, ARTIFACTS_DIR, LOG_LEVEL
 # Remove default loguru handler
 logger.remove()
 
-# 1. Console Handler (Colorized, human-friendly)
-logger.add(
-    sys.stdout,
-    level=LOG_LEVEL,
-    colorize=True,
-    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{extra[context]}</cyan> - <level>{message}</level>",
-    filter=lambda record: "context" in record["extra"] or record["extra"].update(context="System") or True
-)
+# 1. Console Handler (Colorized, human-friendly, only if stdout is attached)
+if sys.stdout is not None:
+    logger.add(
+        sys.stdout,
+        level=LOG_LEVEL,
+        colorize=True,
+        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{extra[context]}</cyan> - <level>{message}</level>",
+        filter=lambda record: "context" in record["extra"] or record["extra"].update(context="System") or True
+    )
 
 # 2. General bot.log (Rotated at 10MB, UTF-8)
 bot_log_path = LOGS_DIR / "bot.log"

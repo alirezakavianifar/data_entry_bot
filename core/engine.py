@@ -168,7 +168,7 @@ class AutomationEngine:
                                 try:
                                     login_ok, login_proof, login_err = site.login(
                                         page=login_page,
-                                        username_or_email=client.email,
+                                        username_or_email=result.username or client.email,
                                         password=password,
                                         client_id=client.client_id
                                     )
@@ -178,28 +178,25 @@ class AutomationEngine:
                                         result.screenshot_path = login_proof
                                         logger.info(f"✅ Login verified with visual proof: {login_proof}")
                                     elif is_pending_verification_error(login_err or ""):
-                                        # Account was created successfully with valid credentials, but user email/KYC is pending
                                         result.login_verified = False
                                         result.login_screenshot_path = login_proof
-                                        result.screenshot_path = login_proof
+                                        result.login_error = login_err
                                         result.error_summary = login_err
                                         result.account_reference = f"{site.site_name} (Pending Activation)"
                                         logger.info(f"ℹ️ Account created with valid credentials for {client.full_name}, but activation is pending ({login_err}). Preserving credentials.")
-                                        # Keep status as SUCCESS and DO NOT remove from spreadsheet
                                     else:
-                                        # Conclusive proof that registration was not successful / credentials rejected
-                                        result.status = RegistrationStatus.FAILED
+                                        # Keep registration as SUCCESS so credentials are NEVER lost
                                         result.login_verified = False
+                                        result.login_screenshot_path = login_proof
                                         result.login_error = login_err
-                                        result.error_summary = f"Login verification failed: {login_err or 'Invalid credentials'}"
-                                        logger.warning(f"❌ Login verification rejected ({login_err}). Registration marked as FAILED.")
-                                        self.provider.remove_success(client_name=client.full_name, site_name=site.site_name, email=client.email)
+                                        result.error_summary = f"Created (Login check pending: {login_err or 'Session/Modal'})"
+                                        result.account_reference = f"{site.site_name} (Login Check Pending)"
+                                        logger.warning(f"⚠️ Account created for {client.full_name} on {site.site_name}, but initial login check was unconfirmed ({login_err}). Preserving credentials.")
                                 except Exception as le:
                                     logger.error(f"Error during login verification step: {le}")
-                                    result.status = RegistrationStatus.FAILED
                                     result.login_verified = False
-                                    result.error_summary = f"Login verification error: {le}"
-                                    self.provider.remove_success(client_name=client.full_name, site_name=site.site_name, email=client.email)
+                                    result.error_summary = f"Created (Login verification exception: {le})"
+                                    result.account_reference = f"{site.site_name} (Login Check Pending)"
                                 finally:
                                     try:
                                         login_ctx.close()
@@ -395,7 +392,7 @@ def register_single_account(
             try:
                 login_ok, login_proof, login_err = site.login(
                     page=login_page,
-                    username_or_email=client.email,
+                    username_or_email=result.username or client.email,
                     password=password,
                     client_id=client.client_id
                 )
@@ -404,10 +401,15 @@ def register_single_account(
                     result.login_screenshot_path = login_proof
                     result.screenshot_path = login_proof
                 else:
-                    result.status = RegistrationStatus.FAILED
                     result.login_verified = False
+                    result.login_screenshot_path = login_proof
                     result.login_error = login_err
-                    result.error_summary = f"Login verification rejected: {login_err}"
+                    result.error_summary = f"Created (Login check pending: {login_err or 'Session/Modal'})"
+                    result.account_reference = f"{site.site_name} (Login Check Pending)"
+            except Exception as le:
+                result.login_verified = False
+                result.error_summary = f"Created (Login verification exception: {le})"
+                result.account_reference = f"{site.site_name} (Login Check Pending)"
             finally:
                 try:
                     login_ctx.close()

@@ -341,17 +341,65 @@ class BetfredAdapter(BaseSiteAdapter):
             if submit_btn.is_visible(timeout=3000):
                 log.info("Submitting final registration on Betfred")
                 submit_btn.click(force=True)
-                page.wait_for_timeout(8000)
+                page.wait_for_timeout(2000)
 
-            # 7. Post-Submission & Result Verification
-            error_modal = page.locator('div[class*="error"]:visible, div[role="alert"]:visible, .error-message:visible, [class*="Alert"]:visible').first
-            if error_modal.is_visible(timeout=2000):
-                raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
-                clean_err = extract_clean_error_message(raw_err_text)
-                is_duplicate = is_already_registered_error(raw_err_text)
+            # 7. Polling Loop (up to 30s) to wait for Betfred registration confirmation & auto-verification
+            log.info("Waiting for Betfred in-platform confirmation (up to 30s)...")
+            max_poll_sec = 30
+            is_confirmed = False
 
-                if is_duplicate:
-                    log.warning(f"⚠️ Betfred: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
+            for sec in range(1, max_poll_sec + 1):
+                # Check for explicit error banner
+                error_modal = page.locator('div[class*="error"]:visible, div[role="alert"]:visible, .error-message:visible, [class*="Alert"]:visible').first
+                if error_modal.is_visible(timeout=300):
+                    raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
+                    clean_err = extract_clean_error_message(raw_err_text)
+                    is_duplicate = is_already_registered_error(raw_err_text)
+
+                    if is_duplicate:
+                        log.warning(f"⚠️ Betfred: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
+                        bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                        return RegistrationResult(
+                            client_id=client.client_id,
+                            client_name=client.full_name,
+                            site_id=self.site_id,
+                            site_name=self.site_name,
+                            status=RegistrationStatus.ALREADY_REGISTERED,
+                            email=client.email,
+                            password=password,
+                            account_reference="Betfred-Existing",
+                            error_summary=f"Already registered: {clean_err}",
+                            screenshot_path=bundle.screenshot_path,
+                            dom_snapshot_path=bundle.dom_snapshot_path
+                        )
+                    elif any(k in raw_err_text.lower() for k in ("invalid", "rejected", "error", "failed")):
+                        log.warning(f"Betfred registration rejected: {clean_err}")
+                        bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(clean_err))
+                        return RegistrationResult(
+                            client_id=client.client_id,
+                            client_name=client.full_name,
+                            site_id=self.site_id,
+                            site_name=self.site_name,
+                            status=RegistrationStatus.FAILED,
+                            email=client.email,
+                            password=password,
+                            error_summary=clean_err,
+                            screenshot_path=bundle.screenshot_path,
+                            dom_snapshot_path=bundle.dom_snapshot_path
+                        )
+
+                # Check page body for already registered
+                body_txt = ""
+                try:
+                    raw_txt = page.locator("body").inner_text()
+                    if isinstance(raw_txt, str):
+                        body_txt = raw_txt
+                except Exception:
+                    pass
+
+                if body_txt and (is_already_registered_error(body_txt) or any(k in body_txt.lower() for k in ("already have an account", "already registered", "recovering your account", "you may already have an account"))):
+                    clean_err = extract_clean_error_message(body_txt)
+                    log.warning(f"⚠️ Betfred: Client {client.full_name} is ALREADY REGISTERED ({clean_err or 'You may already have an account'})")
                     bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
                     return RegistrationResult(
                         client_id=client.client_id,
@@ -361,72 +409,38 @@ class BetfredAdapter(BaseSiteAdapter):
                         status=RegistrationStatus.ALREADY_REGISTERED,
                         email=client.email,
                         password=password,
-                        error_summary=f"Already registered: {clean_err}",
-                        screenshot_path=bundle.screenshot_path,
-                        dom_snapshot_path=bundle.dom_snapshot_path
-                    )
-                else:
-                    log.warning(f"Betfred registration rejected: {clean_err}")
-                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(clean_err))
-                    return RegistrationResult(
-                        client_id=client.client_id,
-                        client_name=client.full_name,
-                        site_id=self.site_id,
-                        site_name=self.site_name,
-                        status=RegistrationStatus.FAILED,
-                        email=client.email,
-                        password=password,
-                        error_summary=clean_err,
+                        account_reference="Betfred-Existing",
+                        error_summary=f"Already registered: {clean_err or 'You may already have an account'}",
                         screenshot_path=bundle.screenshot_path,
                         dom_snapshot_path=bundle.dom_snapshot_path
                     )
 
-            # Check page body for already registered / recovery prompt first
-            body_txt = ""
-            try:
-                raw_txt = page.locator("body").inner_text()
-                if isinstance(raw_txt, str):
-                    body_txt = raw_txt
-            except Exception:
-                pass
+                # Check for session indicators / deposit screen
+                auth_indicators = [
+                    'a:has-text("Deposit")', 'button:has-text("Deposit")',
+                    'a:has-text("My Account")', 'button:has-text("My Account")',
+                    '[data-testid*="user-menu"]', '[data-testid*="balance"]',
+                    '.user-balance', '.account-balance', '[class*="deposit-modal"]'
+                ]
+                has_auth = False
+                for selector in auth_indicators:
+                    try:
+                        if page.locator(selector).first.is_visible(timeout=300):
+                            has_auth = True
+                            break
+                    except Exception:
+                        continue
 
-            if body_txt and (is_already_registered_error(body_txt) or any(k in body_txt.lower() for k in ("already have an account", "already registered", "recovering your account", "you may already have an account"))):
-                clean_err = extract_clean_error_message(body_txt)
-                log.warning(f"⚠️ Betfred: Client {client.full_name} is ALREADY REGISTERED ({clean_err or 'You may already have an account'})")
-                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
-                return RegistrationResult(
-                    client_id=client.client_id,
-                    client_name=client.full_name,
-                    site_id=self.site_id,
-                    site_name=self.site_name,
-                    status=RegistrationStatus.ALREADY_REGISTERED,
-                    email=client.email,
-                    password=password,
-                    account_reference="Betfred-Existing",
-                    error_summary=f"Already registered: {clean_err or 'You may already have an account'}",
-                    screenshot_path=bundle.screenshot_path,
-                    dom_snapshot_path=bundle.dom_snapshot_path
-                )
+                is_reg_open = page.locator('h1:has-text("Join Us"):visible, [data-actionable*="RegistrationPage.PersonalSection"]:visible, [data-actionable*="RegistrationPage.ContactSection"]:visible, [data-actionable*="NavigationButtonsPage"]:visible').first.is_visible(timeout=300)
 
-            # Check for success indicators
-            auth_indicators = [
-                'a:has-text("Deposit")', 'button:has-text("Deposit")',
-                'a:has-text("My Account")', 'button:has-text("My Account")',
-                '[data-testid*="user-menu"]', '[data-testid*="balance"]',
-                '.user-balance', '.account-balance', '[class*="deposit-modal"]'
-            ]
-            has_auth = False
-            for selector in auth_indicators:
-                try:
-                    if page.locator(selector).first.is_visible(timeout=1500):
-                        has_auth = True
-                        break
-                except Exception:
-                    continue
+                if has_auth or not is_reg_open:
+                    log.info(f"Betfred registration confirmed at {sec}s!")
+                    is_confirmed = True
+                    break
 
-            is_reg_open = page.locator('h1:has-text("Join Us"):visible, [data-actionable*="RegistrationPage.PersonalSection"]:visible, [data-actionable*="RegistrationPage.ContactSection"]:visible, [data-actionable*="NavigationButtonsPage"]:visible').first.is_visible(timeout=1500)
+                page.wait_for_timeout(1000)
 
-            if has_auth or not is_reg_open:
+            if is_confirmed:
                 log.info("Betfred registration confirmed successfully!")
                 success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
                 return RegistrationResult(
@@ -450,8 +464,9 @@ class BetfredAdapter(BaseSiteAdapter):
                 site_name=self.site_name,
                 status=RegistrationStatus.FAILED,
                 email=client.email,
+                username=raw_user,
                 password=password,
-                error_summary=bundle.error_summary or "Betfred registration not confirmed",
+                error_summary=bundle.error_summary or "Betfred registration not confirmed within 30s",
                 screenshot_path=bundle.screenshot_path,
                 dom_snapshot_path=bundle.dom_snapshot_path
             )
@@ -512,17 +527,38 @@ class BetfredAdapter(BaseSiteAdapter):
             page.wait_for_timeout(2000)
             self.accept_cookies(page)
 
+            # Dismiss "We've logged you out... session expired" modal if present
+            session_popup = page.locator('div:has-text("logged you out"), div:has-text("session has expired")').first
+            if session_popup.is_visible(timeout=1500):
+                try:
+                    log.info("Dismissing Betfred 'session expired' notification")
+                    close_btn = session_popup.locator('button, [aria-label="Close"], [class*="close"], svg').first
+                    if close_btn.is_visible(timeout=1000):
+                        close_btn.click(force=True)
+                    page.wait_for_timeout(1000)
+                except Exception:
+                    pass
+
             # Locate and click Log In CTA
-            login_btn = page.locator('button:has-text("Log In"), a:has-text("Log In"), button:has-text("Login"), a:has-text("Login")').first
+            login_btn = page.locator('button:has-text("Log In"), a:has-text("Log In"), button:has-text("Login"), a:has-text("Login"), [data-actionable*="login" i]').first
             if login_btn.is_visible(timeout=3000):
                 log.info("Clicking Log In on Betfred")
                 login_btn.click(force=True)
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(2000)
 
             user_inp = page.locator('input[name*="user" i], input[name*="email" i], input[type="email"], input[id*="user" i], input[id*="email" i]').first
             pwd_inp = page.locator('input[name*="password" i], input[type="password"], input[id*="password" i]').first
 
             if not user_inp.is_visible(timeout=4000) or not pwd_inp.is_visible(timeout=4000):
+                # Retry clicking login button if modal didn't appear
+                login_btn_retry = page.locator('button:has-text("Log In"), a:has-text("Log In")').first
+                if login_btn_retry.is_visible(timeout=1000):
+                    login_btn_retry.click(force=True)
+                    page.wait_for_timeout(2000)
+                    user_inp = page.locator('input[name*="user" i], input[name*="email" i], input[type="email"], input[id*="user" i], input[id*="email" i]').first
+                    pwd_inp = page.locator('input[name*="password" i], input[type="password"], input[id*="password" i]').first
+
+            if not user_inp.is_visible(timeout=3000) or not pwd_inp.is_visible(timeout=3000):
                 from core.logger import capture_login_proof_screenshot
                 proof_path = capture_login_proof_screenshot(page, cid, self.site_id)
                 return False, proof_path, "Betfred login inputs not visible"
