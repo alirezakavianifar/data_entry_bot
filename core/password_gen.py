@@ -44,3 +44,49 @@ def generate_username(first_name: str, last_name: str, dob_year: str = "") -> st
     
     username = f"{clean_first}{clean_last[:4]}{suffix}{rand_digits}"
     return username[:16]
+
+
+SECURITY_ANSWERS = {
+    "maiden": [
+        "Taylor", "Davies", "Walker", "Wright", "Robinson", "Wood", "Thompson",
+        "White", "Watson", "Jackson", "Harris", "Clark", "Lewis", "Hall",
+        "Roberts", "Edwards", "Turner", "Phillips", "Campbell", "Parker", "Evans"
+    ],
+    "pet": [
+        "Bella", "Milo", "Buddy", "Luna", "Charlie", "Cooper", "Daisy", "Bailey",
+        "Lola", "Max", "Teddy", "Buster", "Rocky", "Toby", "Ruby", "Oscar", "Coco"
+    ],
+    "city": [
+        "Bristol", "Leeds", "Sheffield", "Manchester", "Norwich", "York", "Bath",
+        "Exeter", "Oxford", "Cambridge", "Derby", "Chester", "Gloucester", "Salisbury"
+    ],
+    "school": [
+        "StMarys", "StJohns", "Oakwood", "Greenfield", "Highfield", "Hillside",
+        "Parkview", "Meadowbrook", "Westgate", "Kingsway", "Redland", "Brookfield"
+    ],
+    "team": [
+        "Arsenal", "Chelsea", "Liverpool", "Everton", "AstonVilla", "Newcastle",
+        "Brighton", "Brentford", "Fulham", "Tottenham", "Southampton", "Leicester"
+    ]
+}
+
+
+def generate_security_answer(question_text: str = "") -> str:
+    """
+    Returns a randomized, realistic answer tailored to the category of the selected security question.
+    """
+    q_lower = (question_text or "").lower()
+    if any(k in q_lower for k in ("mother", "maiden", "surname", "parent")):
+        return secrets.choice(SECURITY_ANSWERS["maiden"])
+    elif any(k in q_lower for k in ("pet", "dog", "cat", "animal")):
+        return secrets.choice(SECURITY_ANSWERS["pet"])
+    elif any(k in q_lower for k in ("city", "town", "born", "birthplace", "place")):
+        return secrets.choice(SECURITY_ANSWERS["city"])
+    elif any(k in q_lower for k in ("school", "college", "primary")):
+        return secrets.choice(SECURITY_ANSWERS["school"])
+    elif any(k in q_lower for k in ("team", "sport", "football", "club")):
+        return secrets.choice(SECURITY_ANSWERS["team"])
+    else:
+        all_options = [ans for sublist in SECURITY_ANSWERS.values() for ans in sublist]
+        return secrets.choice(all_options)
+

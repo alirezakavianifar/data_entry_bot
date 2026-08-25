@@ -187,7 +187,7 @@ def test_betfred_step3_security_question_mock():
 
     res = adapter.fill_registration(page, client, "StrongPass123!@")
     sq_select.select_option.assert_called_once()
-    ans_inp.fill.assert_called_with("London")
+    assert ans_inp.press_sequentially.called or ans_inp.fill.called
 
 
 def test_betfred_self_exclusion_already_registered_mock():

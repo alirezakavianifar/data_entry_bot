@@ -17,9 +17,15 @@ from config.settings import (
     DAILY_CLIENT_LIMIT,
     AUTO_VERIFY_LOGIN,
     BROWSER_HEADLESS,
+    ENABLE_BROWSER_STEALTH,
+    ENABLE_HUMAN_MOUSE,
+    PROXY_SERVER,
+    PROXY_USERNAME,
+    PROXY_PASSWORD,
     LOGS_DIR,
     ARTIFACTS_DIR
 )
+
 from data.factory import get_data_provider
 from data.models import RegistrationStatus
 import webbrowser
@@ -198,7 +204,27 @@ class DataEntryBotGUI(ctk.CTk):
             variable=self.auto_verify_var,
             font=ctk.CTkFont(size=12, weight="bold")
         )
-        self.auto_verify_switch.grid(row=12, column=0, padx=20, pady=(0, 10), sticky="w")
+        self.auto_verify_switch.grid(row=12, column=0, padx=20, pady=(0, 6), sticky="w")
+
+        # Anti-Bot Stealth Shield Switch
+        self.stealth_var = ctk.BooleanVar(value=ENABLE_BROWSER_STEALTH)
+        self.stealth_switch = ctk.CTkSwitch(
+            self.sidebar,
+            text="🛡️ Anti-Bot Stealth Shield",
+            variable=self.stealth_var,
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        self.stealth_switch.grid(row=13, column=0, padx=20, pady=(0, 6), sticky="w")
+
+        # Human Mouse & Bézier Dynamics Switch
+        self.human_mouse_var = ctk.BooleanVar(value=ENABLE_HUMAN_MOUSE)
+        self.human_mouse_switch = ctk.CTkSwitch(
+            self.sidebar,
+            text="🖱️ Human Mouse Dynamics",
+            variable=self.human_mouse_var,
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        self.human_mouse_switch.grid(row=14, column=0, padx=20, pady=(0, 10), sticky="w")
 
         # Open Artifacts Button
         self.open_logs_btn = ctk.CTkButton(
@@ -208,7 +234,8 @@ class DataEntryBotGUI(ctk.CTk):
             hover_color="#3b3b3b",
             command=self._open_artifacts_folder
         )
-        self.open_logs_btn.grid(row=13, column=0, padx=20, pady=15, sticky="ew")
+        self.open_logs_btn.grid(row=15, column=0, padx=20, pady=(10, 15), sticky="ew")
+
 
 
         # ==========================================
@@ -1347,6 +1374,7 @@ class DataEntryBotGUI(ctk.CTk):
         limit = int(self.limit_slider.get())
         client_filter = self.filter_entry.get().strip() or None
         verify_login = self.auto_verify_var.get()
+        stealth_enabled = self.stealth_var.get()
         retry_failed = False
 
         self.is_running = True
@@ -1367,9 +1395,13 @@ class DataEntryBotGUI(ctk.CTk):
                     excel_path=excel_path,
                     sheet_url=sheet_url
                 )
-                browser_mgr = BrowserManager(headless=not headed)
+                browser_mgr = BrowserManager(
+                    headless=not headed,
+                    stealth=stealth_enabled
+                )
                 state_mgr = StateManager()
                 adapters = get_site_adapters(filter_sites=selected_sites)
+
 
                 engine = AutomationEngine(
                     provider=provider,
@@ -1378,6 +1410,7 @@ class DataEntryBotGUI(ctk.CTk):
                     site_adapters=adapters,
                     stop_event=self.stop_event
                 )
+
                 self.current_engine = engine
 
                 engine.run(

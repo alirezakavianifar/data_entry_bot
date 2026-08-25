@@ -16,8 +16,29 @@ Includes both a **Modern Desktop GUI Application** and a **Command-Line Interfac
     - **`🔑 Verify` Button:** Triggers on-demand login execution in a background worker thread, tests authentication live, updates the database, and captures a fresh proof image.
     - **`🖼️ Proof` Button:** Opens the high-resolution logged-in screen proof immediately in the default viewer or Explorer.
     - **`📋 Copy` Button:** One-click clipboard copy for the generated password.
-- **Configurable Promo & Affiliate Links Management (Desktop GUI & Config):**
-  - **Dedicated "🔗 Promo Links & Sites" Tab:** View, edit, test, and manage all bookmaker promo URLs and affiliate tracking codes directly in the GUI without touching JSON files or Python code.
+- **Playbook Platforms & Responsible Gambling No-Deposit Limit Automation:**
+  - Physically completes and dismisses the post-Step 2 Safer Gambling / Deposit Limit onboarding form across all Playbook Engineering platforms (**Star Sports**, **Bet St George**, **BresBet**, **Planet Sport Bet**).
+  - Explicitly selects the *"No I don't want to set a deposit limit"* option, switches acknowledgment toggles ON (`aria-checked="true"`), and drives progression CTAs (`Next`, `Save & Continue`, `Done`) through multiple layers (Playwright clicks + synthetic DOM dispatch).
+  - Prevents premature browser teardown and incomplete signups by actively polling until the onboarding container is fully dismissed and authentic session credentials/balances are established.
+- **🛡️ Anti-Bot Stealth Shield & Device Fingerprint Masking:**
+  - Complete elimination of `navigator.webdriver` and CDP automation flags.
+  - Realistic emulation of authentic `window.chrome` runtime (`runtime`, `loadTimes`, `csi`, `app`), discrete GPU WebGL unmasked vendors (`Google Inc. (NVIDIA)` / `ANGLE`), genuine `navigator.plugins`, `languages`, `hardwareConcurrency` (8 cores), and `deviceMemory` (8GB).
+- **🖱️ Human Mouse & Behavioral Dynamics (Bézier Physics):**
+  - Multi-point cubic Bézier curve mouse trajectories with realistic acceleration, jitter, and target hover pauses before clicking.
+  - Smooth physics-based momentum wheel scrolling replacing deterministic instant jumps.
+- **🔐 Betfred Multi-Step Flow & Dynamic Security Q&A:**
+  - Humanized natural typing cadence across all 5 registration steps with randomized inter-key delay and Bézier mouse coordinates.
+  - Randomized security question selection and category-matched realistic UK answers (Maiden Names, First Pets, Birth Cities, School Names, Football Clubs).
+  - In-session authenticated proof capture upon landing on the welcome screen with automatic progression into the main sportsbook dashboard (`Browse the Betfred Site`).
+- **⏳ QuinnBet Adaptive Auto-Verification & KYC Settle Engine:**
+  - Dynamic adaptive monitoring (30s baseline settle, extending up to 90s while the auto-verification KYC spinner is active).
+  - Automatically detects in-platform verification completion toasts, dismisses net deposit limit modals, and recognizes manual document upload requests while safely preserving valid credentials.
+- **🌐 Residential & Mobile Proxy Integration:**
+  - Built-in support for UK Residential and 4G/5G Mobile Proxies (`PROXY_SERVER`, `PROXY_USERNAME`, `PROXY_PASSWORD`) ensuring requests originate from residential UK ASNs.
+- **Human Pacing & Randomized Delay Engine (15–20s):**
+  - Character-by-character human-like typing simulation, realistic pauses during field input and terms review, and a randomized 15–20 second cooldown between account creation steps to prevent anti-bot fingerprinting.
+
+
   - **🌐 Test URL in Browser:** Click "Test" to instantly open any promo/landing page in your default browser to verify it is active and not returning 404 or expired.
   - **➕ Add Custom Links:** Add new affiliate redirect or promo campaigns on the fly.
   - **🔄 Reset to Defaults:** Revert any single site or all sites to official factory default URLs at any time.

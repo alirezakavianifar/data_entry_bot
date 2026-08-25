@@ -1,13 +1,15 @@
+import random
 import re
 import time
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple
-from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import Page, Locator, TimeoutError as PlaywrightTimeoutError
 
 from data.models import Client, RegistrationResult, RegistrationStatus
 from core.logger import get_logger, capture_failure_bundle, capture_login_proof_screenshot
 
 ALREADY_REGISTERED_PATTERNS = [
+
     r"looks like you['’]re already registered",
     r"already registered",
     r"account with this e-?mail (?:already )?exists",
@@ -34,6 +36,9 @@ def extract_clean_error_message(text: str) -> str:
         return ""
     # Check for known explicit error sentences
     for pat in [
+        r"(Your account is restricted[^\.\n]*[\.\n]?)",
+        r"(Please do not attempt to open another [^\.\n]+ account[^\.\n]*[\.\n]?)",
+        r"(Your account has been (?:restricted|suspended|closed)[^\.\n]*[\.\n]?)",
         r"(looks like you['’]re already registered[^\.\n]*[\.\n]?)",
         r"((?:it )?looks like you already have an account[^\.\n]*[\.\n]?)",
         r"(You['’]re unable to register due to an active Self-Exclusion[^\.\n]*[\.\n]?)",
@@ -70,7 +75,7 @@ def extract_clean_error_message(text: str) -> str:
             return line
 
     for l in lines:
-        if any(k in l.lower() for k in ("already", "exists", "invalid", "failed", "error", "unable", "sorry", "cannot")):
+        if any(k in l.lower() for k in ("already", "exists", "invalid", "failed", "error", "unable", "sorry", "cannot", "restricted")):
             return l
 
     return text[:160].strip()
@@ -103,9 +108,14 @@ PENDING_VERIFICATION_PATTERNS = [
     r"account pending verification",
     r"require email verification",
     r"email verification",
-    r"account (?:is )?suspended",
+    r"account (?:is |has been )?suspended",
     r"suspended",
-    r"account (?:is )?locked"
+    r"account (?:is |has been )?locked",
+    r"account (?:is |has been )?restricted",
+    r"your account is restricted",
+    r"restricted",
+    r"do not attempt to open another",
+    r"unable to open another"
 ]
 
 def is_pending_verification_error(text: str) -> bool:
@@ -117,7 +127,387 @@ def is_pending_verification_error(text: str) -> bool:
             return True
     return False
 
+
+def human_pause(page: Page, min_sec: float = 0.5, max_sec: float = 1.5):
+    """Waits for a randomized duration to simulate human reading/thinking pauses."""
+    try:
+        duration_ms = int(random.uniform(min_sec, max_sec) * 1000)
+        page.wait_for_timeout(duration_ms)
+    except Exception:
+        pass
+
+
+def _calculate_bezier_points(p0: Tuple[float, float], p3: Tuple[float, float], num_points: int = 15) -> list[Tuple[float, float]]:
+    """Calculates smooth cubic Bezier curve points between two screen coordinates."""
+    x0, y0 = p0
+    x3, y3 = p3
+    dx = x3 - x0
+    dy = y3 - y0
+
+    # Generate realistic control points with slight curvature
+    deviation_x = dx * random.uniform(0.1, 0.4) + random.uniform(-20, 20)
+    deviation_y = dy * random.uniform(0.1, 0.4) + random.uniform(-20, 20)
+    
+    p1 = (x0 + deviation_x, y0 + deviation_y)
+    p2 = (x3 - deviation_x * 0.5, y3 - deviation_y * 0.5)
+
+    points = []
+    for i in range(num_points + 1):
+        t = i / float(num_points)
+        # Cubic Bezier formula: (1-t)^3*p0 + 3(1-t)^2*t*p1 + 3(1-t)*t^2*p2 + t^3*p3
+        x = ((1 - t) ** 3) * p0[0] + 3 * ((1 - t) ** 2) * t * p1[0] + 3 * (1 - t) * (t ** 2) * p2[0] + (t ** 3) * p3[0]
+        y = ((1 - t) ** 3) * p0[1] + 3 * ((1 - t) ** 2) * t * p1[1] + 3 * (1 - t) * (t ** 2) * p2[1] + (t ** 3) * p3[1]
+        points.append((x, y))
+    return points
+
+
+def human_mouse_move(page: Page, target_x: float, target_y: float, steps: int = 12):
+    """Moves the mouse to target coordinates along a realistic Bezier curve."""
+    try:
+        # Default start from current approximate position or near center
+        start_x = random.randint(100, 500)
+        start_y = random.randint(100, 400)
+        points = _calculate_bezier_points((start_x, start_y), (target_x, target_y), num_points=steps)
+        for px, py in points:
+            page.mouse.move(px, py)
+            page.wait_for_timeout(random.randint(5, 18))
+    except Exception:
+        try:
+            page.mouse.move(target_x, target_y)
+        except Exception:
+            pass
+
+
+def human_click(locator: Locator, page: Optional[Page] = None):
+    """Performs a humanized click by moving to element bounding box, pausing, and pressing."""
+    try:
+        try:
+            locator.scroll_into_view_if_needed(timeout=1500)
+        except Exception:
+            pass
+        box = locator.bounding_box()
+        if box and page:
+            # Pick a target point inside the element with slight offset from center
+            target_x = box["x"] + box["width"] * random.uniform(0.3, 0.7)
+            target_y = box["y"] + box["height"] * random.uniform(0.3, 0.7)
+            human_mouse_move(page, target_x, target_y)
+            page.wait_for_timeout(random.randint(40, 100))
+            page.mouse.down()
+            page.wait_for_timeout(random.randint(60, 130))
+            page.mouse.up()
+            page.wait_for_timeout(random.randint(50, 120))
+            return
+    except Exception:
+        pass
+    # Fallback to standard click
+    locator.click(force=True)
+
+
+def human_scroll(page: Page, distance_y: int = 300, steps: int = 5):
+    """Simulates realistic mouse-wheel scrolling with momentum easing."""
+    try:
+        step_distance = distance_y / steps
+        for _ in range(steps):
+            jitter = random.randint(-15, 15)
+            page.mouse.wheel(0, step_distance + jitter)
+            page.wait_for_timeout(random.randint(30, 80))
+    except Exception:
+        pass
+
+
+def human_type(locator: Locator, text: str, page: Optional[Page] = None, min_delay_ms: int = 25, max_delay_ms: int = 75):
+    """Types text character-by-character into an input element with realistic human digraph rhythms."""
+    try:
+        try:
+            locator.scroll_into_view_if_needed(timeout=1500)
+        except Exception:
+            pass
+        if page:
+            human_click(locator, page)
+        else:
+            locator.click(force=True)
+        locator.fill("")
+        
+        for idx, ch in enumerate(text):
+            # Add slightly longer pause on space, dots, and at symbols
+            if ch in (" ", ".", "@", "-", "_"):
+                delay = random.randint(110, 220)
+            elif idx > 0 and text[idx - 1] == ch:
+                delay = random.randint(min_delay_ms, min_delay_ms + 25)
+            else:
+                delay = random.randint(min_delay_ms, max_delay_ms)
+                
+            locator.press_sequentially(ch, delay=delay)
+            
+        if page:
+            page.wait_for_timeout(random.randint(80, 250))
+    except Exception:
+        try:
+            locator.fill(text)
+        except Exception:
+            pass
+
+
+
+def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
+    """
+    Specifically detects and physically completes the Playbook Engineering Safer Gambling
+    and Deposit Limit onboarding step by ensuring 'No Deposit Limit' is selected / toggled ON
+    and the Next / Save progression button is clicked until the modal is completely dismissed.
+    """
+    try:
+        modal_selectors = [
+            'aside[data-test="SignUpStepsContainer"]',
+            '[data-test="SignUpStepsContainer"]',
+            'legend:has-text("SAFER GAMBLING")',
+            'h2:has-text("SAFER GAMBLING")',
+            'h1:has-text("SAFER GAMBLING")',
+            'h3:has-text("SAFER GAMBLING")',
+            '[data-test*="safer-gambling"]',
+            '[data-component*="SaferGambling"]',
+            'aside[data-test="SignUpStepsContainer"]:has-text("SAFER GAMBLING")',
+            'aside[data-test="SignUpStepsContainer"]:has-text("DEPOSIT LIMIT")',
+            'aside[data-test="SignUpStepsContainer"]:has-text("deposit limit")',
+            'div[class*="deposit-modal"]',
+            'div:has-text("Set a deposit limit")',
+            'label:has-text("deposit limit")',
+            ':has-text("Would you like to set a deposit limit")',
+            ':has-text("No I don\'t want to set a deposit limit")',
+            ':has-text("No, I don\'t want to set a deposit limit")',
+            ':has-text("No I dont want to set a deposit limit")',
+            ':has-text("I do not wish to set a deposit limit")',
+            ':has-text("I don\'t want to set a deposit limit")',
+            ':has-text("I\'ve looked at my deposit limit")'
+        ]
+
+        is_modal_present = False
+        for sel in modal_selectors:
+            try:
+                if page.locator(sel).first.is_visible(timeout=200):
+                    is_modal_present = True
+                    break
+            except Exception:
+                continue
+
+        if not is_modal_present:
+            return False
+
+        if log:
+            log.info("Playbook Safer Gambling / Onboarding modal detected — ensuring 'No Deposit Limit' is selected and progressing...")
+
+        # 1. Look for explicit 'No I don't want to set a deposit limit' radio / button / label if present
+        no_limit_triggers = [
+            'label:has-text("No I don\'t want to set a deposit limit")',
+            'span:has-text("No I don\'t want to set a deposit limit")',
+            'button:has-text("No I don\'t want to set a deposit limit")',
+            'div:has-text("No I don\'t want to set a deposit limit")',
+            'label:has-text("No, I don\'t want to set a deposit limit")',
+            'span:has-text("No, I don\'t want to set a deposit limit")',
+            'button:has-text("No, I don\'t want to set a deposit limit")',
+            'label:has-text("No I dont want to set a deposit limit")',
+            'span:has-text("No I dont want to set a deposit limit")',
+            'button:has-text("No I dont want to set a deposit limit")',
+            'label:has-text("I don\'t want to set a deposit limit")',
+            'span:has-text("I don\'t want to set a deposit limit")',
+            'button:has-text("I don\'t want to set a deposit limit")',
+            'label:has-text("I do not want to set a deposit limit")',
+            'span:has-text("I do not want to set a deposit limit")',
+            'button:has-text("I do not want to set a deposit limit")',
+            'label:has-text("I do not wish to set a deposit limit")',
+            'span:has-text("I do not wish to set a deposit limit")',
+            'label:has-text("No limit")',
+            'span:has-text("No limit")',
+            'button:has-text("No limit")',
+            '[data-test*="no-limit"]',
+            'label:has-text("No deposit limit")',
+            'span:has-text("No deposit limit")',
+            'button:has-text("No deposit limit")',
+            'label:has-text("Do not set a limit")',
+            'span:has-text("Do not set a limit")',
+            'label:has-text("I\'ve looked at my deposit limit")',
+            'span:has-text("I\'ve looked at my deposit limit")',
+            'input[value="no_limit"]',
+            'input[value="no"]',
+            'input[id*="no-limit"]',
+            'input[type="radio"][value*="no" i]',
+            'input[type="radio"][id*="no" i]'
+        ]
+        explicit_clicked = False
+        for trig in no_limit_triggers:
+            try:
+                el = page.locator(trig).first
+                if el.is_visible(timeout=200):
+                    if log:
+                        log.info(f"Selecting explicit No Limit option: {trig}")
+                    el.scroll_into_view_if_needed()
+                    el.click(force=True)
+                    page.wait_for_timeout(300)
+                    explicit_clicked = True
+                    break
+            except Exception:
+                continue
+
+        # 2. Handle acknowledgement switch / toggle (ensure toggle is switched ON if switch component is used)
+        ack_switch_selectors = [
+            '[role="switch"]',
+            'button[role="switch"]',
+            'span[class*="switch" i]',
+            'div[class*="Switch" i]',
+            'label[class*="switch" i]',
+            'label:has-text("deposit limit")',
+            'label:has-text("I\'ve looked at my deposit limit")',
+            'input[type="checkbox"]',
+            '[data-component*="Switch" i]',
+            '[data-test*="switch" i]',
+            '[data-test*="deposit-limit" i]',
+            'span[class*="slider" i]',
+            'div[class*="toggle" i]'
+        ]
+        toggled = explicit_clicked
+        for switch_sel in ack_switch_selectors:
+            try:
+                switches = page.locator(switch_sel)
+                cnt = switches.count()
+                for i in range(cnt):
+                    s = switches.nth(i)
+                    if s.is_visible(timeout=200):
+                        # Check checked state
+                        aria_chk = s.get_attribute("aria-checked")
+                        is_input_chk = False
+                        try:
+                            tag = s.evaluate("e => e.tagName")
+                            if tag == "INPUT":
+                                is_input_chk = s.is_checked()
+                        except Exception:
+                            pass
+
+                        # If not already checked / true, toggle it
+                        if aria_chk != "true" and not is_input_chk:
+                            if log:
+                                log.info(f"Toggling Safer Gambling switch ON ({switch_sel} #{i})")
+                            s.scroll_into_view_if_needed()
+                            s.click(force=True)
+                            page.wait_for_timeout(300)
+                            toggled = True
+                            break
+                        else:
+                            if log:
+                                log.info(f"Safer Gambling switch is already ON ({switch_sel} #{i})")
+                            toggled = True
+                            break
+                if toggled:
+                    break
+            except Exception:
+                continue
+
+        # 3. JavaScript Fallback: Scan DOM and ensure switch / radio is toggled ON
+        try:
+            page.evaluate("""() => {
+                const elements = Array.from(document.querySelectorAll('label, button, span, div, p, a, input[type="radio"], input[type="checkbox"], [role="switch"]'));
+                const target = elements.find(el => {
+                    const txt = (el.innerText || el.textContent || el.value || '').toLowerCase();
+                    return (txt.includes("don't want to set a deposit limit") || 
+                            txt.includes("dont want to set a deposit limit") ||
+                            txt.includes("no i don't want") ||
+                            txt.includes("no, i don't want") ||
+                            txt.includes("no i dont want") ||
+                            txt.includes("do not want to set a deposit limit") ||
+                            txt.includes("do not wish to set a deposit limit") ||
+                            txt.includes("i've looked at my deposit limit") ||
+                            txt.includes("no deposit limit") ||
+                            txt.includes("no limit"));
+                });
+                if (target) {
+                    target.click();
+                }
+                const sw = document.querySelector('[role="switch"], [class*="switch" i], [class*="Switch" i], input[type="checkbox"]');
+                if (sw && sw.getAttribute('aria-checked') !== 'true') {
+                    sw.setAttribute('aria-checked', 'true');
+                    sw.dispatchEvent(new Event('change', { bubbles: true }));
+                    sw.dispatchEvent(new Event('input', { bubbles: true }));
+                    sw.click();
+                }
+            }""")
+            page.wait_for_timeout(400)
+        except Exception:
+            pass
+
+        # 4. Click the progression CTA (Next / Save & Continue / Done / Confirm)
+        progression_buttons = [
+            'button[data-test="next-button"]',
+            'button[data-test="save-button"]',
+            'button[data-test="done-button"]',
+            'button[data-test*="next" i]',
+            'button[data-test*="save" i]',
+            'button[data-test*="continue" i]',
+            'button:has-text("Next")',
+            'button:has-text("NEXT")',
+            'button:has-text("Save & Continue")',
+            'button:has-text("Save and Continue")',
+            'button:has-text("Save")',
+            'button:has-text("SAVE")',
+            'button:has-text("Done")',
+            'button:has-text("DONE")',
+            'button:has-text("Finish")',
+            'button:has-text("FINISH")',
+            'button:has-text("Continue")',
+            'button:has-text("CONTINUE")',
+            'button:has-text("Confirm")',
+            'button:has-text("CONFIRM")',
+            'button:has-text("Agree & Join")',
+            'button:has-text("Skip")',
+            'button:has-text("Maybe later")',
+            'a:has-text("Skip")',
+            'button[type="submit"]'
+        ]
+        btn_clicked = False
+        for btn_sel in progression_buttons:
+            try:
+                btn = page.locator(btn_sel).first
+                if btn.is_visible(timeout=300):
+                    if log:
+                        log.info(f"Clicking Safer Gambling progression button: {btn_sel}")
+                    btn.scroll_into_view_if_needed()
+                    try:
+                        btn.evaluate("b => b.removeAttribute('disabled')")
+                    except Exception:
+                        pass
+                    btn.click(force=True)
+                    page.wait_for_timeout(1500)
+                    btn_clicked = True
+                    break
+            except Exception:
+                continue
+
+        # Fallback progression button click via JavaScript
+        if not btn_clicked:
+            try:
+                page.evaluate("""() => {
+                    const btns = Array.from(document.querySelectorAll('button, a, input[type="submit"]'));
+                    const nextBtn = btns.find(b => {
+                        const t = (b.innerText || b.textContent || b.value || '').trim().toLowerCase();
+                        const dt = (b.getAttribute('data-test') || '').toLowerCase();
+                        return ['next', 'save & continue', 'save and continue', 'save', 'done', 'finish', 'confirm', 'continue', 'agree & join', 'skip'].includes(t) ||
+                               dt.includes('next') || dt.includes('save') || dt.includes('continue') || dt.includes('done');
+                    });
+                    if (nextBtn) {
+                        nextBtn.removeAttribute('disabled');
+                        nextBtn.click();
+                    }
+                }""")
+                page.wait_for_timeout(1500)
+            except Exception:
+                pass
+
+        return True
+    except Exception as ex:
+        if log:
+            log.warning(f"Warning handling Playbook Safer Gambling modal: {ex}")
+        return False
+
+
 COMMON_COOKIE_SELECTORS = [
+
 
     '#onetrust-accept-btn-handler',
     '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',

@@ -1,6 +1,14 @@
 from typing import Optional
 from playwright.sync_api import Page
-from sites.base import BaseSiteAdapter, extract_clean_error_message, is_already_registered_error
+from sites.base import (
+    BaseSiteAdapter,
+    extract_clean_error_message,
+    is_already_registered_error,
+    human_type,
+    human_pause,
+    human_click,
+    human_scroll
+)
 from data.models import Client, RegistrationResult, RegistrationStatus
 from core.logger import get_logger, capture_failure_bundle, capture_success_screenshot, capture_login_proof_screenshot
 
@@ -75,12 +83,15 @@ class BetfredAdapter(BaseSiteAdapter):
                     screenshot_path=bundle.screenshot_path
                 )
 
-            raw_user = client.email.split("@")[0].replace(".", "")[:12]
+            from core.password_gen import generate_username
+            raw_user = generate_username(client.first_name, client.last_name, str(client.dob_year or ""))
             log.info(f"Filling Step 1 credentials: Email={client.email}, Username={raw_user}")
-            em_inp.fill(client.email)
-            un_inp.fill(raw_user)
-            pw_inp.fill(password)
-            page.wait_for_timeout(500)
+            human_type(em_inp, client.email, page)
+            human_pause(page, 0.3, 0.6)
+            human_type(un_inp, raw_user, page)
+            human_pause(page, 0.3, 0.6)
+            human_type(pw_inp, password, page)
+            human_pause(page, 0.4, 0.8)
 
             # Dismiss transient alert popup if present
             page.evaluate("""() => {
@@ -92,7 +103,7 @@ class BetfredAdapter(BaseSiteAdapter):
 
             # Check Terms & Conditions checkbox
             page.locator('div[data-actionable="RegistrationPage.TermsAndConditions.agree_terms"]').first.click(force=True)
-            page.wait_for_timeout(500)
+            human_pause(page, 0.5, 1.0)
 
             # Step 1 Submission with Automatic Network Error Recovery Loop
             max_step1_attempts = 3
@@ -101,7 +112,7 @@ class BetfredAdapter(BaseSiteAdapter):
                 cont1_btn = page.locator('button[data-actionable="RegistrationPage.NavigationButtonsPage1.Continue"], button:has-text("Continue")').first
                 if cont1_btn.is_visible(timeout=2000):
                     cont1_btn.click(force=True)
-                    page.wait_for_timeout(3000)
+                    human_pause(page, 2.0, 3.5)
 
                 # 1. Check for Step 1 inline validation errors & already registered notifications
                 step1_err = page.locator(
@@ -153,7 +164,7 @@ class BetfredAdapter(BaseSiteAdapter):
                         const alertBg = document.querySelector('[data-actionable="common.Alert.Background"]');
                         if (alertBg) alertBg.remove();
                     }""")
-                    page.wait_for_timeout(2000)
+                    human_pause(page, 1.5, 2.5)
 
                     # Ensure Terms checkbox remains checked
                     try:
@@ -209,35 +220,48 @@ class BetfredAdapter(BaseSiteAdapter):
             fn_inp = page.locator('input[data-actionable="RegistrationPage.PersonalSection.first_name"], input[name="firstName"]').first
             ln_inp = page.locator('input[data-actionable="RegistrationPage.PersonalSection.last_name"], input[name="lastName"]').first
 
-            if fn_inp.is_visible(timeout=1000):
+            if fn_inp.is_visible(timeout=2000):
                 log.info("Filling Step 2 Personal Details (Name, DOB)")
                 mr_pill = page.locator('button[data-actionable="RegistrationPage.PersonalSection.title.Mr"], button:has-text("Mr")').first
                 if mr_pill.is_visible(timeout=1000):
                     mr_pill.click(force=True)
+                    human_pause(page, 0.2, 0.5)
                 
-                fn_inp.fill(client.first_name)
+                human_type(fn_inp, client.first_name, page)
+                human_pause(page, 0.3, 0.6)
                 if ln_inp.is_visible(timeout=1000):
-                    ln_inp.fill(client.last_name)
+                    human_type(ln_inp, client.last_name, page)
+                    human_pause(page, 0.3, 0.6)
 
                 # Segmented DOB (DD, MM, YYYY)
-                page.locator('input[data-actionable="RegistrationPage.DateOfBirthInput.day"]').fill(str(int(client.dob_day)).zfill(2))
-                page.locator('input[data-actionable="RegistrationPage.DateOfBirthInput.month"]').fill(str(int(client.dob_month)).zfill(2))
-                page.locator('input[data-actionable="RegistrationPage.DateOfBirthInput.year"]').fill(str(client.dob_year))
-                page.wait_for_timeout(500)
+                day_inp = page.locator('input[data-actionable="RegistrationPage.DateOfBirthInput.day"]').first
+                month_inp = page.locator('input[data-actionable="RegistrationPage.DateOfBirthInput.month"]').first
+                year_inp = page.locator('input[data-actionable="RegistrationPage.DateOfBirthInput.year"]').first
+                
+                human_type(day_inp, str(int(client.dob_day)).zfill(2), page)
+                human_pause(page, 0.2, 0.4)
+                human_type(month_inp, str(int(client.dob_month)).zfill(2), page)
+                human_pause(page, 0.2, 0.4)
+                human_type(year_inp, str(client.dob_year), page)
+                human_pause(page, 0.4, 0.8)
 
                 cont2_btn = page.locator('button[data-actionable="RegistrationPage.NavigationButtonsPage2.Continue"], button:has-text("Continue")').first
                 if cont2_btn.is_visible(timeout=2000):
                     cont2_btn.click(force=True)
-                    page.wait_for_timeout(3000)
+                    human_pause(page, 2.0, 3.0)
 
             # 4. STEP 3: Contact Details (Mobile Number & Security Question)
             phone_inp = page.locator('input[data-actionable="RegistrationPage.TelephoneNumberInput.telephone.floatingHelp"], input[id="RegistrationPage.TelephoneNumberInput.telephone.telephone"], input[name="telephone"], input[data-actionable*="telephone" i], input[type="tel"]').first
             if phone_inp.is_visible(timeout=3000):
                 log.info("Filling Step 3 Contact Details")
-                phone_inp.fill(client.phone)
-                page.wait_for_timeout(300)
+                human_type(phone_inp, client.phone, page)
+                human_pause(page, 0.4, 0.8)
 
-                # Security Question (Specific selector to avoid matching the telephone areaCode select)
+                # Security Question (Randomized selection to avoid identical patterns across accounts)
+                import secrets
+                from core.password_gen import generate_security_answer
+
+                selected_question_text = ""
                 sq_select = page.locator(
                     'select[data-actionable="RegistrationPage.Dropdown.securityQuestion"], '
                     'select[name="securityQuestion"], '
@@ -247,16 +271,49 @@ class BetfredAdapter(BaseSiteAdapter):
                 ).first
                 if sq_select.is_visible(timeout=2500):
                     try:
-                        sq_select.select_option(index=1)
+                        options = sq_select.locator('option')
+                        opt_count = options.count()
+                        if opt_count > 1:
+                            chosen_idx = secrets.randbelow(opt_count - 1) + 1
+                            sq_select.select_option(index=chosen_idx)
+                            try:
+                                selected_question_text = options.nth(chosen_idx).inner_text()
+                            except Exception:
+                                pass
+                        else:
+                            sq_select.select_option(index=1)
                     except Exception:
-                        sq_select.select_option(label="Your mother's maiden name?")
-                    page.wait_for_timeout(300)
+                        try:
+                            fallback_labels = [
+                                "Your mother's maiden name?",
+                                "What was the name of your first pet?",
+                                "In what city or town were you born?",
+                                "What was your first school's name?",
+                                "What is your favourite sports team?"
+                            ]
+                            chosen_label = secrets.choice(fallback_labels)
+                            sq_select.select_option(label=chosen_label)
+                            selected_question_text = chosen_label
+                        except Exception:
+                            pass
+                    human_pause(page, 0.3, 0.6)
                 else:
                     dropdown_trigger = page.locator('div:has-text("Choose your question"), [data-actionable*="securityQuestion" i]').first
                     if dropdown_trigger.is_visible(timeout=1500):
                         dropdown_trigger.click(force=True)
-                        page.wait_for_timeout(500)
-                        page.locator('li:not(:has-text("Choose your question")), div[role="option"]:not(:has-text("Choose your question"))').first.click(force=True)
+                        human_pause(page, 0.4, 0.8)
+                        opt_items = page.locator('li:not(:has-text("Choose your question")), div[role="option"]:not(:has-text("Choose your question"))')
+                        opt_count = opt_items.count()
+                        if opt_count > 0:
+                            chosen_opt_idx = secrets.randbelow(opt_count)
+                            chosen_opt = opt_items.nth(chosen_opt_idx)
+                            try:
+                                selected_question_text = chosen_opt.inner_text()
+                            except Exception:
+                                pass
+                            chosen_opt.click(force=True)
+                        else:
+                            opt_items.first.click(force=True)
 
                 ans_inp = page.locator(
                     'input[data-actionable="RegistrationPage.ContactSection.security_answer"], '
@@ -266,8 +323,10 @@ class BetfredAdapter(BaseSiteAdapter):
                     'input[name*="answer" i]'
                 ).first
                 if ans_inp.is_visible(timeout=1500):
-                    ans_inp.fill("London")
-                    page.wait_for_timeout(300)
+                    sec_ans = generate_security_answer(selected_question_text)
+                    log.info(f"Step 3: Security Question='{selected_question_text or 'Random'}' -> Randomized Answer='{sec_ans}'")
+                    human_type(ans_inp, sec_ans, page)
+                    human_pause(page, 0.4, 0.8)
 
                 cont3_btn = page.locator(
                     'button[data-actionable="RegistrationPage.NavigationButtonsPage3.Continue"], '
@@ -275,7 +334,7 @@ class BetfredAdapter(BaseSiteAdapter):
                 ).first
                 if cont3_btn.is_visible(timeout=2000):
                     cont3_btn.click(force=True)
-                    page.wait_for_timeout(3000)
+                    human_pause(page, 2.0, 3.0)
 
             # 5. STEP 4: Address Details
             pc_inp = page.locator(
@@ -289,16 +348,15 @@ class BetfredAdapter(BaseSiteAdapter):
             if pc_inp.is_visible(timeout=3000):
                 search_query = f"{client.address_line1}, {client.postcode}" if client.address_line1 else client.postcode
                 log.info(f"Filling Step 4 Address Details: {search_query}")
-                pc_inp.click()
-                page.keyboard.type(search_query, delay=50)
-                page.wait_for_timeout(1500)
+                human_type(pc_inp, search_query, page)
+                human_pause(page, 1.0, 2.0)
 
                 # Look for Loqate / PCA Predict suggestion item (.pcaitem) or select dropdown
                 sug = page.locator('.pcaitem:visible, div[class*="pcaitem"]:visible, div[role="option"]:visible').first
                 if sug.is_visible(timeout=3000):
                     log.info("Selecting address suggestion from dropdown...")
                     sug.click(force=True)
-                    page.wait_for_timeout(1000)
+                    human_pause(page, 0.8, 1.5)
                 else:
                     # Fallback: Check select dropdown or press enter
                     addr_opt = page.locator('select[data-actionable*="address" i], select[name*="address" i]').first
@@ -311,7 +369,7 @@ class BetfredAdapter(BaseSiteAdapter):
                         page.keyboard.press("ArrowDown")
                         page.wait_for_timeout(300)
                         page.keyboard.press("Enter")
-                    page.wait_for_timeout(1000)
+                    human_pause(page, 0.8, 1.5)
 
                 cont4_btn = page.locator(
                     'button[data-actionable="RegistrationPage.NavigationButtonsPage4.Continue"], '
@@ -319,18 +377,18 @@ class BetfredAdapter(BaseSiteAdapter):
                 ).first
                 if cont4_btn.is_visible(timeout=2000):
                     cont4_btn.click(force=True)
-                    page.wait_for_timeout(3000)
+                    human_pause(page, 2.0, 3.0)
 
             # 6. STEP 5: Settings & Final Submit
             limit_later = page.locator('text="I will set a limit later", [data-actionable*="limit_later" i], div:has-text("set a limit later")').first
             if limit_later.is_visible(timeout=3000):
                 log.info("Step 5: Selecting 'I will set a limit later'...")
                 limit_later.click(force=True)
-                page.wait_for_timeout(500)
+                human_pause(page, 0.4, 0.8)
 
             # Scroll down to make Register button visible
             page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
-            page.wait_for_timeout(500)
+            human_pause(page, 1.5, 3.0)
 
             submit_btn = page.locator(
                 'button[data-actionable="RegistrationPage.NavigationButtonsPage5.Register"], '
@@ -340,13 +398,16 @@ class BetfredAdapter(BaseSiteAdapter):
             ).first
             if submit_btn.is_visible(timeout=3000):
                 log.info("Submitting final registration on Betfred")
+                submit_btn.scroll_into_view_if_needed()
                 submit_btn.click(force=True)
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(3000)
 
-            # 7. Polling Loop (up to 30s) to wait for Betfred registration confirmation & auto-verification
-            log.info("Waiting for Betfred in-platform confirmation (up to 30s)...")
-            max_poll_sec = 30
+            # 7. Dynamic Adaptive Polling & Settle Loop (up to 60s) for Betfred registration & session confirmation
+            log.info("Monitoring Betfred in-platform confirmation (30s initial settle, up to 60s)...")
+            max_poll_sec = 60
+            min_settle_sec = 30
             is_confirmed = False
+            in_session_verified = False
 
             for sec in range(1, max_poll_sec + 1):
                 # Check for explicit error banner
@@ -372,7 +433,7 @@ class BetfredAdapter(BaseSiteAdapter):
                             screenshot_path=bundle.screenshot_path,
                             dom_snapshot_path=bundle.dom_snapshot_path
                         )
-                    elif any(k in raw_err_text.lower() for k in ("invalid", "rejected", "error", "failed")):
+                    elif any(k in raw_err_text.lower() for k in ("invalid", "rejected", "error", "failed", "restricted")):
                         log.warning(f"Betfred registration rejected: {clean_err}")
                         bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(clean_err))
                         return RegistrationResult(
@@ -388,7 +449,7 @@ class BetfredAdapter(BaseSiteAdapter):
                             dom_snapshot_path=bundle.dom_snapshot_path
                         )
 
-                # Check page body for already registered
+                # Check page body for already registered or self-exclusion
                 body_txt = ""
                 try:
                     raw_txt = page.locator("body").inner_text()
@@ -397,7 +458,7 @@ class BetfredAdapter(BaseSiteAdapter):
                 except Exception:
                     pass
 
-                if body_txt and (is_already_registered_error(body_txt) or any(k in body_txt.lower() for k in ("already have an account", "already registered", "recovering your account", "you may already have an account"))):
+                if body_txt and (is_already_registered_error(body_txt) or any(k in body_txt.lower() for k in ("already have an account", "already registered", "recovering your account", "you may already have an account", "self-exclusion", "active self-exclusion"))):
                     clean_err = extract_clean_error_message(body_txt)
                     log.warning(f"⚠️ Betfred: Client {client.full_name} is ALREADY REGISTERED ({clean_err or 'You may already have an account'})")
                     bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
@@ -415,34 +476,66 @@ class BetfredAdapter(BaseSiteAdapter):
                         dom_snapshot_path=bundle.dom_snapshot_path
                     )
 
-                # Check for session indicators / deposit screen
-                auth_indicators = [
-                    'a:has-text("Deposit")', 'button:has-text("Deposit")',
-                    'a:has-text("My Account")', 'button:has-text("My Account")',
-                    '[data-testid*="user-menu"]', '[data-testid*="balance"]',
-                    '.user-balance', '.account-balance', '[class*="deposit-modal"]'
+                # Check for welcome / active authenticated session modal (Image 1)
+                welcome_indicators = [
+                    ':has-text("thanks for joining Betfred")',
+                    ':has-text("Add a Payment Method")',
+                    ':has-text("Browse the Betfred Site")',
+                    'button:has-text("Add a Payment Method")',
+                    'button:has-text("Browse the Betfred Site")',
+                    'h1:has-text("MY ACCOUNT")',
+                    'a:has-text("Deposit")',
+                    'button:has-text("Deposit")',
+                    '[data-testid*="user-menu"]',
+                    '.user-balance'
                 ]
-                has_auth = False
-                for selector in auth_indicators:
+                for selector in welcome_indicators:
                     try:
-                        if page.locator(selector).first.is_visible(timeout=300):
-                            has_auth = True
+                        if page.locator(selector).first.is_visible(timeout=200):
+                            if not in_session_verified:
+                                log.info(f"Betfred authenticated welcome/dashboard state detected via '{selector}'!")
+                            is_confirmed = True
+                            in_session_verified = True
                             break
                     except Exception:
                         continue
 
-                is_reg_open = page.locator('h1:has-text("Join Us"):visible, [data-actionable*="RegistrationPage.PersonalSection"]:visible, [data-actionable*="RegistrationPage.ContactSection"]:visible, [data-actionable*="NavigationButtonsPage"]:visible').first.is_visible(timeout=300)
+                # Automatically click 'Browse the Betfred Site' to enter the main sportsbook page
+                welcome_action_buttons = [
+                    'button:has-text("Browse the Betfred Site")',
+                    'a:has-text("Browse the Betfred Site")',
+                    'button:has-text("Browse")',
+                    'a:has-text("Browse")',
+                    'button:has-text("Add a Payment Method")',
+                    'button[aria-label="Close"]',
+                    'button.close',
+                    'div[data-actionable*="close" i]'
+                ]
+                for btn_sel in welcome_action_buttons:
+                    try:
+                        action_btn = page.locator(btn_sel).first
+                        if action_btn.is_visible(timeout=200):
+                            log.info(f"Clicking Betfred post-registration action button: '{btn_sel}'")
+                            action_btn.click(force=True)
+                            page.wait_for_timeout(1000)
+                            break
+                    except Exception:
+                        continue
 
-                if has_auth or not is_reg_open:
-                    log.info(f"Betfred registration confirmed at {sec}s!")
+                is_reg_open = page.locator('h1:has-text("Join Us"):visible, [data-actionable*="RegistrationPage.PersonalSection"]:visible, [data-actionable*="RegistrationPage.ContactSection"]:visible, [data-actionable*="NavigationButtonsPage"]:visible').first.is_visible(timeout=200)
+                if not is_reg_open:
                     is_confirmed = True
+
+                # If past min_settle_sec and authenticated session is verified, settle cleanly
+                if sec >= min_settle_sec and in_session_verified:
+                    log.info(f"Betfred settling completed cleanly at {sec}s!")
                     break
 
                 page.wait_for_timeout(1000)
 
             if is_confirmed:
-                log.info("Betfred registration confirmed successfully!")
-                success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
+                log.info("Betfred registration settled and confirmed successfully in active session!")
+                success_shot = capture_login_proof_screenshot(page, client.client_id, self.site_id) if in_session_verified else capture_success_screenshot(page, client.client_id, self.site_id)
                 return RegistrationResult(
                     client_id=client.client_id,
                     client_name=client.full_name,
@@ -452,8 +545,10 @@ class BetfredAdapter(BaseSiteAdapter):
                     email=client.email,
                     username=raw_user,
                     password=password,
-                    account_reference="Betfred-Direct",
-                    screenshot_path=success_shot
+                    account_reference="Betfred-Direct (Active Session Verified)" if in_session_verified else "Betfred-Direct",
+                    screenshot_path=success_shot,
+                    login_verified=in_session_verified,
+                    login_screenshot_path=success_shot if in_session_verified else None
                 )
 
             bundle = capture_failure_bundle(page, client.client_id, self.site_id, "verify_submission")
@@ -564,24 +659,27 @@ class BetfredAdapter(BaseSiteAdapter):
                 return False, proof_path, "Betfred login inputs not visible"
 
             log.info(f"Filling credentials for {username_or_email}")
-            user_inp.fill(username_or_email)
-            pwd_inp.fill(password)
-            page.wait_for_timeout(500)
+            human_type(user_inp, username_or_email, page)
+            human_pause(page, 0.3, 0.6)
+            human_type(pwd_inp, password, page)
+            human_pause(page, 0.4, 0.8)
 
             modal = page.locator('div[class*="modal"], div[class*="login"], form').first
             submit_btn = modal.locator('button[type="submit"]:has-text("Log In"), button:has-text("Log In"), button[type="submit"]').first
             if submit_btn.is_visible(timeout=2000):
+                submit_btn.scroll_into_view_if_needed()
                 submit_btn.click(force=True)
             else:
                 pwd_inp.press("Enter")
 
             page.wait_for_timeout(5000)
 
-            # Check for error messages
-            err_el = page.locator('div[class*="error"]:visible, .error-message:visible, div[role="alert"]:visible, :has-text("not verified"):visible, :has-text("Invalid"):visible').first
+            # Check for error messages (including restriction banners)
+            err_el = page.locator('div[class*="error"]:visible, .error-message:visible, div[role="alert"]:visible, :has-text("not verified"):visible, :has-text("restricted"):visible, :has-text("Invalid"):visible').first
             err_text = None
-            if err_el.is_visible(timeout=1000):
-                err_text = err_el.inner_text().strip().replace("\n", " - ")
+            if err_el.is_visible(timeout=1500):
+                raw_err = err_el.inner_text().strip().replace("\n", " - ")
+                err_text = extract_clean_error_message(raw_err) or raw_err
 
             from core.logger import capture_login_proof_screenshot
             proof_path = capture_login_proof_screenshot(page, cid, self.site_id)
@@ -608,7 +706,7 @@ class BetfredAdapter(BaseSiteAdapter):
                 return True, proof_path, None
             else:
                 summary = err_text or "Login failed: Credentials rejected or session indicators not found"
-                log.warning(f"Betfred login failed: {summary}")
+                log.warning(f"Betfred login check result: {summary}")
                 return False, proof_path, summary
 
         except Exception as e:

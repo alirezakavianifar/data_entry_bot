@@ -257,16 +257,18 @@ class QuinnbetAdapter(BaseSiteAdapter):
                     finish_btn.click(force=True)
                     page.wait_for_timeout(2000)
 
-            # Polling Loop (up to 30s) to wait for in-platform auto-verification & dismiss deposit limit modal
-            log.info("Waiting for QuinnBet in-platform auto-verification & confirmation (up to 30s)...")
-            max_poll_sec = 30
+            # Dynamic Adaptive Polling & Settle Loop (up to 90s) for in-platform auto-verification
+            log.info("Monitoring QuinnBet auto-verification (30s initial settle, up to 90s if KYC is in progress)...")
+            max_poll_sec = 90
+            min_settle_sec = 30
             is_confirmed = False
             auto_verified_banner = False
+            kyc_manual_required = False
 
             for sec in range(1, max_poll_sec + 1):
                 # 1. Check for duplicate / already registered error message
                 error_modal = page.locator('app-register .alert:visible, app-register .error:visible, mat-error:visible, div[role="alert"]:visible').first
-                if error_modal.is_visible(timeout=500):
+                if error_modal.is_visible(timeout=300):
                     raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
                     clean_err = extract_clean_error_message(raw_err_text)
                     is_duplicate = is_already_registered_error(raw_err_text)
@@ -305,23 +307,41 @@ class QuinnbetAdapter(BaseSiteAdapter):
 
                 # 2. Check and auto-dismiss Net Deposit Limit popup
                 deposit_limit_dismiss = page.locator('button:has-text("NO, MAYBE LATER"), button:has-text("No, Maybe Later"), button:has-text("NO, THANKS"), button:has-text("No thanks"), button:has-text("MAYBE LATER")').first
-                if deposit_limit_dismiss.is_visible(timeout=500):
+                if deposit_limit_dismiss.is_visible(timeout=300):
                     try:
                         log.info("Dismissing 'Set your Net Deposit limit' modal on QuinnBet")
                         deposit_limit_dismiss.click(force=True)
-                        page.wait_for_timeout(1000)
+                        page.wait_for_timeout(800)
                     except Exception:
                         pass
 
-                # 3. Check for auto-verification confirmation banner
+                # 3. Check for auto-verification completion status (Fast Success Exit after min settle)
                 verif_toast = page.locator(':has-text("auto-verification was successfully completed"), :has-text("auto-verification completed"), :has-text("Great news! Your auto-verification")').first
-                if verif_toast.is_visible(timeout=500):
-                    log.info(f"QuinnBet in-platform auto-verification banner confirmed at {sec}s!")
+                if verif_toast.is_visible(timeout=300):
+                    log.info(f"QuinnBet in-platform auto-verification successfully completed at {sec}s!")
                     auto_verified_banner = True
                     is_confirmed = True
-                    break
+                    if sec >= min_settle_sec:
+                        break
 
-                # 4. Check for genuine authenticated session indicators
+                # 4. Check for manual KYC document upload request
+                doc_req = page.locator(':has-text("upload your documents"), :has-text("unable to verify your details automatically"), :has-text("verify your identity manually"), :has-text("Proof of ID")').first
+                if doc_req.is_visible(timeout=200):
+                    log.warning(f"QuinnBet: Manual KYC document upload requested at {sec}s")
+                    kyc_manual_required = True
+                    is_confirmed = True
+                    if sec >= min_settle_sec:
+                        break
+
+                # 5. Check for active in-progress spinner
+                verif_in_prog = page.locator(':has-text("auto-verification is currently in progress"), :has-text("Hang tight"), :has-text("auto-verification in progress")').first
+                is_still_verifying = verif_in_prog.is_visible(timeout=300)
+                if is_still_verifying:
+                    is_confirmed = True
+                    if sec % 5 == 0 or sec == 1:
+                        log.info(f"QuinnBet: Auto-verification actively in progress ({sec}s/{max_poll_sec}s)...")
+
+                # 6. Check for genuine authenticated session indicators
                 auth_indicators = [
                     'button:has-text("DEPOSIT")', 'a:has-text("DEPOSIT")',
                     'a:has-text("Deposit")', 'button:has-text("Deposit")',
@@ -329,20 +349,21 @@ class QuinnbetAdapter(BaseSiteAdapter):
                     '[data-testid*="user-menu"]', '[data-testid*="balance"]',
                     '.user-balance', '.account-balance', '[class*="deposit-modal"]'
                 ]
-                has_auth = False
                 for selector in auth_indicators:
                     try:
-                        if page.locator(selector).first.is_visible(timeout=300):
-                            has_auth = True
+                        if page.locator(selector).first.is_visible(timeout=200):
+                            is_confirmed = True
                             break
                     except Exception:
                         continue
 
-                is_reg_open = page.locator('app-register:visible, input[name="email"]:visible').first.is_visible(timeout=300)
-
-                if has_auth and not is_reg_open:
-                    log.info(f"QuinnBet session indicators confirmed at {sec}s!")
+                is_reg_open = page.locator('app-register:visible, input[name="email"]:visible').first.is_visible(timeout=200)
+                if not is_reg_open:
                     is_confirmed = True
+
+                # If past min_settle_sec and not actively stuck on in-progress spinner, we can conclude
+                if sec >= min_settle_sec and not is_still_verifying:
+                    log.info(f"QuinnBet settling completed cleanly at {sec}s!")
                     break
 
                 page.wait_for_timeout(1000)
@@ -359,8 +380,15 @@ class QuinnbetAdapter(BaseSiteAdapter):
                 pass
 
             if is_confirmed or auto_verified_banner:
-                log.info("QuinnBet registration & auto-verification confirmed successfully!")
-                success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
+                if auto_verified_banner:
+                    ref = "QuinnBet-Direct (Auto-Verified)"
+                elif kyc_manual_required:
+                    ref = "QuinnBet-Direct (KYC Document Required)"
+                else:
+                    ref = "QuinnBet-Direct (KYC In Progress)"
+
+                log.info(f"QuinnBet registration confirmed: {ref}")
+                success_shot = capture_login_proof_screenshot(page, client.client_id, self.site_id)
                 return RegistrationResult(
                     client_id=client.client_id,
                     client_name=client.full_name,
@@ -370,8 +398,10 @@ class QuinnbetAdapter(BaseSiteAdapter):
                     email=client.email,
                     username=client.email,
                     password=password,
-                    account_reference="QuinnBet-Direct (Auto-Verified)",
-                    screenshot_path=success_shot
+                    account_reference=ref,
+                    screenshot_path=success_shot,
+                    login_verified=True,
+                    login_screenshot_path=success_shot
                 )
             else:
                 bundle = capture_failure_bundle(page, client.client_id, self.site_id, "verify_submission")

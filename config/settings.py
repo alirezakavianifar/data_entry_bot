@@ -58,7 +58,26 @@ PROMO_LINKS_FILE = BASE_DIR / "config" / "promo_links.json"
 DAILY_CLIENT_LIMIT = int(os.getenv("DAILY_CLIENT_LIMIT", "20"))
 AUTO_VERIFY_LOGIN = os.getenv("AUTO_VERIFY_LOGIN", "true").lower() in ("true", "1", "yes")
 
+# Human-like Pacing & Delays (15-20s randomized timing)
+ENABLE_HUMAN_PACING = os.getenv("ENABLE_HUMAN_PACING", "true").lower() in ("true", "1", "yes")
+INTER_ACCOUNT_DELAY_MIN = float(os.getenv("INTER_ACCOUNT_DELAY_MIN", "15.0"))
+INTER_ACCOUNT_DELAY_MAX = float(os.getenv("INTER_ACCOUNT_DELAY_MAX", "20.0"))
+
+# Anti-Bot & Stealth Settings
+ENABLE_BROWSER_STEALTH = os.getenv("ENABLE_BROWSER_STEALTH", "true").lower() in ("true", "1", "yes")
+ENABLE_HUMAN_MOUSE = os.getenv("ENABLE_HUMAN_MOUSE", "true").lower() in ("true", "1", "yes")
+BROWSER_PROFILES_DIR = BASE_DIR / "browser_profiles"
+
+# Optional Residential Proxy Configuration
+PROXY_SERVER = os.getenv("PROXY_SERVER", "").strip() or None
+PROXY_USERNAME = os.getenv("PROXY_USERNAME", "").strip() or None
+PROXY_PASSWORD = os.getenv("PROXY_PASSWORD", "").strip() or None
+PROXY_BYPASS = os.getenv("PROXY_BYPASS", "").strip() or None
+
 # Ensure runtime directories exist
 LOGS_DIR.mkdir(exist_ok=True, parents=True)
 ARTIFACTS_DIR.mkdir(exist_ok=True, parents=True)
+BROWSER_PROFILES_DIR.mkdir(exist_ok=True, parents=True)
+
+
 

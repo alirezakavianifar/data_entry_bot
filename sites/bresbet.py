@@ -1,8 +1,16 @@
 import time
 from playwright.sync_api import Page
-from sites.base import BaseSiteAdapter, extract_clean_error_message, is_already_registered_error
+from sites.base import (
+    BaseSiteAdapter,
+    extract_clean_error_message,
+    is_already_registered_error,
+    human_type,
+    human_pause,
+    handle_playbook_safer_gambling_no_limit
+)
 from data.models import Client, RegistrationResult, RegistrationStatus
-from core.logger import get_logger, capture_failure_bundle, capture_success_screenshot
+from core.logger import get_logger, capture_failure_bundle, capture_success_screenshot, capture_login_proof_screenshot
+
 
 
 class BresbetAdapter(BaseSiteAdapter):
@@ -65,14 +73,15 @@ class BresbetAdapter(BaseSiteAdapter):
                 )
 
             log.info(f"Filling Step 1 credentials for {client.email}")
-            email_inp.fill(client.email)
-            pwd_inp.fill(password)
-            page.wait_for_timeout(500)
+            human_type(email_inp, client.email, page)
+            human_pause(page, 0.4, 0.8)
+            human_type(pwd_inp, password, page)
+            human_pause(page, 0.6, 1.2)
 
             create_acc_btn = page.locator('button:has-text("Create Account"), button:has-text("Join Here"), button[data-test="create-account-button"], button[type="submit"]:has-text("Join"), button[type="submit"]:has-text("Sign Up"), button[type="submit"]').first
             if create_acc_btn.is_visible(timeout=2000):
                 create_acc_btn.click(force=True)
-                page.wait_for_timeout(3000)
+                human_pause(page, 2.0, 3.5)
 
             # Check for Step 1 validation errors
             step1_err = page.locator('div[class*="error"]:visible, span[class*="error"]:visible, p[class*="error"]:visible, [data-test*="error"]:visible, [class*="errorMessage"]:visible, :has-text("already exists"):visible').first
@@ -157,42 +166,46 @@ class BresbetAdapter(BaseSiteAdapter):
             title_el = page.locator('[data-test="mr-title-choose-box"], [data-test="title-choose-box"] div:first-child, label:has-text("Mr")').first
             if title_el.is_visible(timeout=2000):
                 title_el.click(force=True)
-                page.wait_for_timeout(300)
+                human_pause(page, 0.2, 0.5)
 
             log.info("Filling Step 2 Personal Details (Name, DOB, Phone, Postcode)")
-            fn_inp.fill(client.first_name)
-            ln_inp.fill(client.last_name)
+            human_type(fn_inp, client.first_name, page)
+            human_pause(page, 0.3, 0.7)
+            human_type(ln_inp, client.last_name, page)
+            human_pause(page, 0.3, 0.7)
             day_inp.fill(str(int(client.dob_day)).zfill(2))
             month_inp.fill(str(int(client.dob_month)).zfill(2))
             year_inp.fill(str(client.dob_year))
+            human_pause(page, 0.3, 0.6)
 
             # Phone number (strip leading 0 as UK prefix +44 is pre-selected)
             cleaned_phone = client.phone
             if cleaned_phone.startswith("+44"):
                 cleaned_phone = cleaned_phone[3:]
             cleaned_phone = cleaned_phone.lstrip("0")
-            num_inp.fill(cleaned_phone)
+            human_type(num_inp, cleaned_phone, page)
+            human_pause(page, 0.4, 0.8)
 
             # Postcode & Address Lookup
-            postcode_inp.fill(client.postcode)
-            page.wait_for_timeout(500)
+            human_type(postcode_inp, client.postcode, page)
+            human_pause(page, 0.5, 1.0)
 
             search_addr_btn = page.locator('button[data-test="sign-up-search-address-button"]').first
             if search_addr_btn.is_visible(timeout=2000):
                 log.info(f"Searching address for postcode: {client.postcode}")
                 search_addr_btn.click(force=True)
-                page.wait_for_timeout(2500)
+                human_pause(page, 2.0, 3.0)
 
                 # Select matching address or traverse nested dropdown
                 addr_list = page.locator('li[data-component="AddressesListItemWrapper"], ul[class*="AddressesList"] li')
                 if addr_list.count() > 0:
                     log.info(f"Selecting address: {addr_list.first.inner_text().strip()}")
                     addr_list.first.click(force=True)
-                    page.wait_for_timeout(1500)
+                    human_pause(page, 1.0, 2.0)
                     if addr_list.count() > 0:
                         log.info(f"Selecting specific street address: {addr_list.first.inner_text().strip()}")
                         addr_list.first.click(force=True)
-                        page.wait_for_timeout(1000)
+                        human_pause(page, 0.8, 1.5)
 
                 # Fallback to manual entry if address input is not yet populated
                 addr1 = page.locator('input[data-test="first-line-address-input"], input[name="address-1"]').first
@@ -200,7 +213,7 @@ class BresbetAdapter(BaseSiteAdapter):
                     manual_btn = page.locator('a:has-text("Enter Manually"), button:has-text("Enter Manually"), span:has-text("Enter Manually")').first
                     if manual_btn.is_visible(timeout=1000):
                         manual_btn.click(force=True)
-                        page.wait_for_timeout(1000)
+                        human_pause(page, 0.8, 1.5)
                         if addr1.is_visible(timeout=1000):
                             addr1.fill(client.address_line1)
                             city_inp = page.locator('input[data-test="town-city-input"], input[name="town-city"]').first
@@ -210,11 +223,13 @@ class BresbetAdapter(BaseSiteAdapter):
             # 4. Step 2 Submission: Agree & Join
             agree_btn = page.locator('button[data-test="agree-and-join-button"]').first
             if agree_btn.is_visible(timeout=3000):
+                log.info("Simulating human review before submitting registration...")
+                human_pause(page, 3.0, 6.0)
                 log.info("Submitting registration via 'Agree & Join'")
                 agree_btn.scroll_into_view_if_needed()
                 page.wait_for_timeout(500)
                 agree_btn.click(force=True)
-                page.wait_for_timeout(6000)
+                page.wait_for_timeout(4000)
 
             # 5. Confirm Registration Success
             # Check for error message under Agree & Join or in SignUpStepsContainer
@@ -256,61 +271,56 @@ class BresbetAdapter(BaseSiteAdapter):
                         dom_snapshot_path=bundle.dom_snapshot_path
                     )
 
-            # Handle Safer Gambling modal if present
-            # 5. Polling Loop (up to 30s) to wait for BresBet confirmation & auto-verification
-            log.info("Waiting for BresBet in-platform confirmation (up to 30s)...")
-            max_poll_sec = 30
+            # 5. Polling Loop (up to 35s) to complete Playbook onboarding & confirm active session
+            log.info("Waiting for BresBet onboarding & in-platform confirmation (up to 35s)...")
+            max_poll_sec = 35
             is_confirmed = False
+            has_auth = False
 
             for sec in range(1, max_poll_sec + 1):
-                # Handle Safer Gambling modal if present
-                safer_modal = page.locator('legend:has-text("SAFER GAMBLING"), h2:has-text("SAFER GAMBLING"), [data-test*="safer-gambling"]').first
-                if safer_modal.is_visible(timeout=500):
-                    log.info("Safer Gambling modal detected, progressing...")
-                    ack_toggle = page.locator('span[class*="switch"], [role="switch"], label:has-text("deposit limit"), [class*="Switch"]').last
-                    if ack_toggle.is_visible(timeout=500):
-                        try:
-                            ack_toggle.click(force=True)
-                            page.wait_for_timeout(300)
-                        except Exception:
-                            pass
-                    next_btn = page.locator('button:has-text("Next"), button:has-text("NEXT"), button[data-test*="next"]').first
-                    if next_btn.is_visible(timeout=1000):
-                        try:
-                            next_btn.click(force=True)
-                            page.wait_for_timeout(1000)
-                        except Exception:
-                            pass
+                # Always attempt to detect and handle Playbook Safer Gambling / Deposit Limit onboarding
+                handle_playbook_safer_gambling_no_limit(page, log if sec % 5 == 1 else None)
 
+                # Check for genuine authenticated dashboard / session indicators
                 auth_indicators = [
-                    'a:has-text("Deposit")', 'button:has-text("Deposit")',
                     'button:has-text("DEPOSIT")', 'a:has-text("DEPOSIT")',
+                    'a:has-text("Deposit")', 'button:has-text("Deposit")',
                     'a:has-text("My Account")', 'button:has-text("My Account")',
                     '[data-component="AccountNavigation"] [data-test*="account"]',
-                    '.user-balance', '[class*="deposit-modal"]', 'h1:has-text("SAFER GAMBLING")'
+                    '[data-test="account-menu-button"]',
+                    '.user-balance', '[class*="deposit-modal"]'
                 ]
-                has_auth = False
                 for selector in auth_indicators:
                     try:
-                        if page.locator(selector).first.is_visible(timeout=300):
+                        if page.locator(selector).first.is_visible(timeout=200):
                             has_auth = True
                             break
                     except Exception:
                         continue
 
-                # Check if signup form is still open
-                agree_still_open = page.locator('button[data-test="agree-and-join-button"]:visible').first.is_visible(timeout=300)
+                # Check if signup form / onboarding modal is still active in the DOM
+                is_onboarding_open = page.locator(
+                    'aside[data-test="SignUpStepsContainer"]:visible, '
+                    '[data-test="SignUpStepsContainer"]:visible, '
+                    'button[data-test="agree-and-join-button"]:visible, '
+                    'legend:has-text("SAFER GAMBLING"):visible, '
+                    'h1:has-text("SAFER GAMBLING"):visible, '
+                    'h2:has-text("SAFER GAMBLING"):visible, '
+                    'h3:has-text("SAFER GAMBLING"):visible, '
+                    '[data-test*="safer-gambling"]:visible'
+                ).first.is_visible(timeout=200)
 
-                if has_auth or not agree_still_open:
-                    log.info(f"BresBet registration confirmed at {sec}s!")
+                # Only confirm when authenticated session exists AND onboarding modal is dismissed
+                if has_auth and not is_onboarding_open:
+                    log.info(f"BresBet onboarding dismissed and session confirmed at {sec}s!")
                     is_confirmed = True
                     break
 
                 page.wait_for_timeout(1000)
 
-            if is_confirmed:
-                log.info("BresBet registration confirmed successfully!")
-                success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
+            if is_confirmed or has_auth:
+                log.info("BresBet registration and onboarding confirmed successfully!")
+                success_shot = capture_login_proof_screenshot(page, client.client_id, self.site_id) if has_auth else capture_success_screenshot(page, client.client_id, self.site_id)
                 return RegistrationResult(
                     client_id=client.client_id,
                     client_name=client.full_name,
@@ -320,8 +330,10 @@ class BresbetAdapter(BaseSiteAdapter):
                     email=client.email,
                     username=client.email,
                     password=password,
-                    account_reference="BresBet-Direct",
-                    screenshot_path=success_shot
+                    account_reference="BresBet-Direct (Active Session Verified)" if has_auth else "BresBet-Direct",
+                    screenshot_path=success_shot,
+                    login_verified=has_auth,
+                    login_screenshot_path=success_shot if has_auth else None
                 )
             else:
                 bundle = capture_failure_bundle(page, client.client_id, self.site_id, "verify_submission")

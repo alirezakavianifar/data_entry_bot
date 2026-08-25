@@ -1,7 +1,13 @@
 import time
+import random
 import threading
 from typing import List, Optional, Tuple, Callable
-from config.settings import AUTO_VERIFY_LOGIN
+from config.settings import (
+    AUTO_VERIFY_LOGIN,
+    ENABLE_HUMAN_PACING,
+    INTER_ACCOUNT_DELAY_MIN,
+    INTER_ACCOUNT_DELAY_MAX
+)
 from data.base_provider import BaseDataProvider
 from data.models import Client, RegistrationResult, RegistrationStatus
 from core.state import StateManager
@@ -10,6 +16,7 @@ from core.password_gen import generate_password
 from sites.base import BaseSiteAdapter, is_pending_verification_error
 from sites import get_site_adapters
 from core.logger import get_logger
+
 
 logger = get_logger(step="Engine")
 
@@ -161,6 +168,8 @@ class AutomationEngine:
                         if result.status == RegistrationStatus.SUCCESS and verify_login:
                             if self.is_stop_requested():
                                 logger.warning(f"Stop requested by user: skipping login verification for {client.full_name} on {site.site_name}.")
+                            elif result.login_verified and result.login_screenshot_path:
+                                logger.info(f"✅ In-session authentication verified during registration for {client.full_name} on {site.site_name}. Skipping redundant re-login.")
                             else:
                                 logger.info(f"🔐 Verifying account creation via login for {client.full_name} on {site.site_name}...")
                                 login_ctx = self.browser_mgr.new_context(trace_name=f"{client.client_id}_{site.site_id}_login")
@@ -182,8 +191,9 @@ class AutomationEngine:
                                         result.login_screenshot_path = login_proof
                                         result.login_error = login_err
                                         result.error_summary = login_err
-                                        result.account_reference = f"{site.site_name} (Pending Activation)"
-                                        logger.info(f"ℹ️ Account created with valid credentials for {client.full_name}, but activation is pending ({login_err}). Preserving credentials.")
+                                        is_restr = "restricted" in (login_err or "").lower() or "attempt to open another" in (login_err or "").lower()
+                                        result.account_reference = f"{site.site_name} (Restricted/KYC Required)" if is_restr else f"{site.site_name} (Pending Activation)"
+                                        logger.info(f"ℹ️ Account created with valid credentials for {client.full_name}, status: {login_err}. Preserving credentials.")
                                     else:
                                         # Keep registration as SUCCESS so credentials are NEVER lost
                                         result.login_verified = False
@@ -252,7 +262,14 @@ class AutomationEngine:
                         except Exception:
                             pass
 
+                        # Randomized human cooldown (15-20s) between registrations
+                        if ENABLE_HUMAN_PACING and not self.is_stop_requested():
+                            cooldown_sec = random.uniform(INTER_ACCOUNT_DELAY_MIN, INTER_ACCOUNT_DELAY_MAX)
+                            logger.info(f"⏳ Waiting {round(cooldown_sec, 1)}s randomized human cooldown before next action...")
+                            self.stop_event.wait(timeout=cooldown_sec)
+
                 stats["processed_clients"] += 1
+
 
         finally:
             if self.is_stop_requested():
@@ -279,7 +296,8 @@ def verify_single_account(
     client_name: str = "",
     site_name: str = "",
     headed: bool = True,
-    provider: Optional[BaseDataProvider] = None
+    provider: Optional[BaseDataProvider] = None,
+    stealth: Optional[bool] = None
 ) -> Tuple[bool, Optional[str], Optional[str]]:
     """
     Executes an on-demand login verification for a single registered account.
@@ -289,7 +307,7 @@ def verify_single_account(
         raise ValueError(f"No adapter found for site '{site_id}'")
 
     site = adapters[0]
-    browser_mgr = BrowserManager(headless=not headed)
+    browser_mgr = BrowserManager(headless=not headed, stealth=stealth)
     state_mgr = StateManager()
 
     try:
@@ -349,13 +367,14 @@ def register_single_account(
     site_id: str,
     provider: BaseDataProvider,
     headed: bool = False,
-    verify_login: bool = True
+    verify_login: bool = True,
+    stealth: Optional[bool] = None
 ) -> RegistrationResult:
     """
     Executes a fresh registration for a single client on a specific site.
     """
     state_mgr = StateManager()
-    browser_mgr = BrowserManager(headless=not headed)
+    browser_mgr = BrowserManager(headless=not headed, stealth=stealth)
     adapters = get_site_adapters(filter_sites=[site_id])
     if not adapters:
         raise ValueError(f"No adapter found for site '{site_id}'")
