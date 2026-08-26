@@ -249,12 +249,194 @@ def human_type(locator: Locator, text: str, page: Optional[Page] = None, min_del
 
 
 
+def select_matching_playbook_address(page: Page, client: Client, log=None) -> bool:
+    """
+    Specifically matches and selects the exact address for the client from Playbook's
+    postcode lookup dropdown, or automatically falls back to manual entry to guarantee
+    the address matches client.address_line1 and client.town_city 100%.
+    """
+    import re
+    try:
+        search_addr_btn = page.locator('button[data-test="sign-up-search-address-button"], button:has-text("Search"), button:has-text("Find Address")').first
+        if search_addr_btn.is_visible(timeout=2000):
+            if log:
+                log.info(f"Searching address for postcode: {client.postcode}")
+            search_addr_btn.click(force=True)
+            human_pause(page, 1.5, 2.5)
+
+            # Look for address dropdown options
+            addr_list = page.locator('li[data-component="AddressesListItemWrapper"], ul[class*="AddressesList"] li, div[class*="AddressesList"] div, div[role="listbox"] div, div[role="option"]')
+            cnt = addr_list.count()
+            
+            if cnt > 0:
+                target_raw = client.address_line1.strip().lower()
+                target_clean = re.sub(r'[^a-z0-9\s]', ' ', target_raw)
+                target_tokens = [t for t in target_clean.split() if t]
+                
+                # Extract house/flat number or building number from target
+                target_numbers = re.findall(r'\b\d+[a-z]?\b', target_clean)
+                target_num = target_numbers[0] if target_numbers else None
+
+                best_idx = -1
+                best_score = -1
+                best_text = ""
+
+                for idx in range(cnt):
+                    try:
+                        item = addr_list.nth(idx)
+                        item_text = (item.inner_text() or "").strip()
+                        item_lower = item_text.lower()
+                        item_clean = re.sub(r'[^a-z0-9\s]', ' ', item_lower)
+                        item_numbers = re.findall(r'\b\d+[a-z]?\b', item_clean)
+
+                        score = 0
+                        # 1. Exact match or starts with target address line 1
+                        if target_clean in item_clean or item_clean.startswith(target_clean):
+                            score += 100
+                        elif target_raw in item_lower:
+                            score += 90
+                        else:
+                            # 2. House number matching
+                            if target_num:
+                                if target_num in item_numbers:
+                                    score += 50
+                                    # Bonus if it starts with the house number
+                                    if item_clean.startswith(f"{target_num} ") or f" {target_num} " in item_clean:
+                                        score += 20
+                                else:
+                                    # Mismatched house number penalty
+                                    score -= 40
+                            
+                            # 3. Street name keyword matching
+                            matching_tokens = [t for t in target_tokens if t not in (target_num or "") and len(t) > 2 and t in item_clean]
+                            score += len(matching_tokens) * 15
+
+                        if score > best_score:
+                            best_score = score
+                            best_idx = idx
+                            best_text = item_text
+                    except Exception:
+                        continue
+
+                # If we found a confident match (score >= 40), click it
+                if best_idx >= 0 and best_score >= 40:
+                    if log:
+                        log.info(f"Selecting best matching address: '{best_text}' (score: {best_score})")
+                    selected_item = addr_list.nth(best_idx)
+                    selected_item.scroll_into_view_if_needed()
+                    selected_item.click(force=True)
+                    human_pause(page, 0.8, 1.5)
+
+                    # Check if a second-level list appeared (e.g. street was clicked, now list of house numbers appears)
+                    if addr_list.count() > 0:
+                        sub_best_idx = -1
+                        sub_best_score = -1
+                        sub_best_text = ""
+                        for s_idx in range(addr_list.count()):
+                            try:
+                                s_item = addr_list.nth(s_idx)
+                                s_text = (s_item.inner_text() or "").strip()
+                                s_lower = s_text.lower()
+                                s_clean = re.sub(r'[^a-z0-9\s]', ' ', s_lower)
+                                s_numbers = re.findall(r'\b\d+[a-z]?\b', s_clean)
+                                
+                                s_score = 0
+                                if target_clean in s_clean:
+                                    s_score += 100
+                                elif target_num and target_num in s_numbers:
+                                    s_score += 70
+                                    if s_clean.startswith(f"{target_num} "):
+                                        s_score += 20
+                                
+                                if s_score > sub_best_score:
+                                    sub_best_score = s_score
+                                    sub_best_idx = s_idx
+                                    sub_best_text = s_text
+                            except Exception:
+                                continue
+
+                        if sub_best_idx >= 0 and sub_best_score >= 40:
+                            if log:
+                                log.info(f"Selecting specific house number: '{sub_best_text}' (score: {sub_best_score})")
+                            sub_item = addr_list.nth(sub_best_idx)
+                            sub_item.scroll_into_view_if_needed()
+                            sub_item.click(force=True)
+                            human_pause(page, 0.8, 1.5)
+                else:
+                    if log:
+                        log.info(f"No confident address match in dropdown for '{client.address_line1}' (best score: {best_score}). Will use manual entry.")
+
+        # Address Verification & Fallback: Guarantee address_line1 and town_city match client details
+        addr1 = page.locator('input[data-test="first-line-address-input"], input[name="address-1"], input[placeholder*="Address"]').first
+        city_inp = page.locator('input[data-test="town-city-input"], input[name="town-city"], input[placeholder*="Town"], input[placeholder*="City"]').first
+
+        # Check if address line 1 is visible and accurately filled
+        addr_val = ""
+        try:
+            if addr1.is_visible(timeout=1000):
+                addr_val = addr1.input_value().strip()
+        except Exception:
+            pass
+
+        target_simple = re.sub(r'[^a-z0-9]', '', client.address_line1.lower())
+        current_simple = re.sub(r'[^a-z0-9]', '', addr_val.lower())
+
+        needs_manual = False
+        if not addr_val:
+            needs_manual = True
+        elif target_simple not in current_simple and current_simple not in target_simple:
+            if log:
+                log.warning(f"Address field mismatch: populated with '{addr_val}', expected '{client.address_line1}'. Overriding with correct address.")
+            needs_manual = True
+
+        if needs_manual:
+            manual_btn = page.locator('a:has-text("Enter Manually"), button:has-text("Enter Manually"), span:has-text("Enter Manually"), button:has-text("Enter address manually"), a:has-text("manual"), button:has-text("manual")').first
+            if manual_btn.is_visible(timeout=1500):
+                if log:
+                    log.info("Switching to manual address entry mode")
+                manual_btn.scroll_into_view_if_needed()
+                manual_btn.click(force=True)
+                human_pause(page, 0.6, 1.2)
+
+            if addr1.is_visible(timeout=1500):
+                addr1.scroll_into_view_if_needed()
+                addr1.fill("")
+                human_type(addr1, client.address_line1, page)
+                if log:
+                    log.info(f"Filled Address Line 1: '{client.address_line1}'")
+
+            if city_inp.is_visible(timeout=1500):
+                city_val = ""
+                try:
+                    city_val = city_inp.input_value().strip()
+                except Exception:
+                    pass
+                if not city_val or client.town_city.lower() not in city_val.lower():
+                    city_inp.scroll_into_view_if_needed()
+                    city_inp.fill("")
+                    human_type(city_inp, client.town_city, page)
+                    if log:
+                        log.info(f"Filled Town/City: '{client.town_city}'")
+
+        return True
+    except Exception as e:
+        if log:
+            log.warning(f"Warning in select_matching_playbook_address: {e}")
+        return False
+
+
 def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
     """
     Specifically detects and physically completes the Playbook Engineering Safer Gambling
-    and Deposit Limit onboarding step by ensuring 'No Deposit Limit' is selected / toggled ON
-    and the Next / Save progression button is clicked until the modal is completely dismissed.
+    and Rolling Net Deposit Limit onboarding modal via a guaranteed multi-stage execution:
+      - Step 0: Aggressive scroll-to-bottom of ALL internal scroll containers & viewport
+      - Step 1: Deposit limit input population (100/200/300/400/500) if required
+      - Step 2: Multi-vector toggle/switch activation (Mouse, React Fiber, Prototype, Container, Keyboard)
+      - Step 3: Deep React Fiber property and synthetic DOM event dispatch
+      - Step 4: Multi-selector Progression CTA (Next / Save / Done / Continue / Accept / Acknowledge)
+      - Step 5: Verification & Dismissal check
     """
+    import random
     try:
         modal_selectors = [
             'aside[data-test="SignUpStepsContainer"]',
@@ -271,13 +453,22 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
             'div[class*="deposit-modal"]',
             'div:has-text("Set a deposit limit")',
             'label:has-text("deposit limit")',
+            ':has-text("Rolling Net Deposit Limits")',
+            ':has-text("Rolling Net Deposit Limit")',
+            ':has-text("rolling net 1-day deposit limit")',
+            ':has-text("How do Rolling Net Deposit Limits help me?")',
+            ':has-text("Can I set my own Rolling Net Deposit Limits?")',
+            ':has-text("What happens if I reach my Rolling Net Deposit Limit?")',
             ':has-text("Would you like to set a deposit limit")',
             ':has-text("No I don\'t want to set a deposit limit")',
             ':has-text("No, I don\'t want to set a deposit limit")',
             ':has-text("No I dont want to set a deposit limit")',
             ':has-text("I do not wish to set a deposit limit")',
             ':has-text("I don\'t want to set a deposit limit")',
-            ':has-text("I\'ve looked at my deposit limit")'
+            ':has-text("I\'ve looked at my deposit limit")',
+            ':has-text("I am happy with deposit limit")',
+            ':has-text("happy with deposit limit")',
+            ':has-text("happy with it")'
         ]
 
         is_modal_present = False
@@ -293,211 +484,451 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
             return False
 
         if log:
-            log.info("Playbook Safer Gambling / Onboarding modal detected — ensuring 'No Deposit Limit' is selected and progressing...")
+            log.info("Playbook Safer Gambling / Rolling Deposit Limit modal detected — executing aggressive scroll, toggle & progression...")
 
-        # 1. Look for explicit 'No I don't want to set a deposit limit' radio / button / label if present
-        no_limit_triggers = [
-            'label:has-text("No I don\'t want to set a deposit limit")',
-            'span:has-text("No I don\'t want to set a deposit limit")',
-            'button:has-text("No I don\'t want to set a deposit limit")',
-            'div:has-text("No I don\'t want to set a deposit limit")',
-            'label:has-text("No, I don\'t want to set a deposit limit")',
-            'span:has-text("No, I don\'t want to set a deposit limit")',
-            'button:has-text("No, I don\'t want to set a deposit limit")',
-            'label:has-text("No I dont want to set a deposit limit")',
-            'span:has-text("No I dont want to set a deposit limit")',
-            'button:has-text("No I dont want to set a deposit limit")',
-            'label:has-text("I don\'t want to set a deposit limit")',
-            'span:has-text("I don\'t want to set a deposit limit")',
-            'button:has-text("I don\'t want to set a deposit limit")',
-            'label:has-text("I do not want to set a deposit limit")',
-            'span:has-text("I do not want to set a deposit limit")',
-            'button:has-text("I do not want to set a deposit limit")',
-            'label:has-text("I do not wish to set a deposit limit")',
-            'span:has-text("I do not wish to set a deposit limit")',
-            'label:has-text("No limit")',
-            'span:has-text("No limit")',
-            'button:has-text("No limit")',
-            '[data-test*="no-limit"]',
-            'label:has-text("No deposit limit")',
-            'span:has-text("No deposit limit")',
-            'button:has-text("No deposit limit")',
-            'label:has-text("Do not set a limit")',
-            'span:has-text("Do not set a limit")',
-            'label:has-text("I\'ve looked at my deposit limit")',
-            'span:has-text("I\'ve looked at my deposit limit")',
-            'input[value="no_limit"]',
-            'input[value="no"]',
-            'input[id*="no-limit"]',
-            'input[type="radio"][value*="no" i]',
-            'input[type="radio"][id*="no" i]'
-        ]
-        explicit_clicked = False
-        for trig in no_limit_triggers:
+        max_passes = 4
+        for pass_num in range(1, max_passes + 1):
+            # Step 0: AGGRESSIVE SCROLL TO BOTTOM OF ALL INTERNAL CONTAINERS
+            # UKGC / Playbook requires scrolling to the bottom of the terms container before enabling controls
             try:
-                el = page.locator(trig).first
-                if el.is_visible(timeout=200):
-                    if log:
-                        log.info(f"Selecting explicit No Limit option: {trig}")
-                    el.scroll_into_view_if_needed()
-                    el.click(force=True)
-                    page.wait_for_timeout(300)
-                    explicit_clicked = True
-                    break
+                page.evaluate("""() => {
+                    // 1. Scroll every single scrollable element to its very bottom
+                    const allNodes = Array.from(document.querySelectorAll('*'));
+                    for (const el of allNodes) {
+                        if (el.scrollHeight > el.clientHeight + 10) {
+                            el.scrollTop = el.scrollHeight;
+                            el.dispatchEvent(new Event('scroll', { bubbles: true }));
+                            el.dispatchEvent(new Event('wheel', { bubbles: true }));
+                        }
+                    }
+                    // 2. Target specific modal/drawer containers
+                    const specific = [
+                        document.querySelector('aside[data-test="SignUpStepsContainer"]'),
+                        document.querySelector('[data-test="SignUpStepsContainer"]'),
+                        document.querySelector('div[class*="modal"]'),
+                        document.querySelector('div[class*="drawer"]'),
+                        document.querySelector('div[class*="dialog"]'),
+                        document.querySelector('div[class*="content"]'),
+                        document.querySelector('div[class*="body"]'),
+                        document.body,
+                        document.documentElement
+                    ];
+                    for (const c of specific) {
+                        if (c) {
+                            c.scrollTop = c.scrollHeight;
+                            c.dispatchEvent(new Event('scroll', { bubbles: true }));
+                        }
+                    }
+                    window.scrollTo(0, document.body.scrollHeight);
+                }""")
+                page.wait_for_timeout(200)
+
+                # Physical mouse wheel over modal center
+                modal_box = None
+                for m_sel in ['aside[data-test="SignUpStepsContainer"]', '[data-test="SignUpStepsContainer"]', 'div[class*="modal"]', 'div[class*="drawer"]', 'body']:
+                    try:
+                        m_loc = page.locator(m_sel).first
+                        if m_loc.is_visible(timeout=100):
+                            modal_box = m_loc.bounding_box(timeout=200)
+                            if modal_box:
+                                break
+                    except Exception:
+                        continue
+
+                if modal_box:
+                    page.mouse.move(modal_box["x"] + modal_box["width"] / 2, modal_box["y"] + modal_box["height"] / 2)
+                    page.mouse.wheel(0, 5000)
+
+                # Keyboard page down & end to trigger any lazy rendering
+                page.keyboard.press("PageDown")
+                page.keyboard.press("PageDown")
+                page.keyboard.press("End")
+                page.wait_for_timeout(200)
             except Exception:
-                continue
+                pass
 
-        # 2. Handle acknowledgement switch / toggle (ensure toggle is switched ON if switch component is used)
-        ack_switch_selectors = [
-            '[role="switch"]',
-            'button[role="switch"]',
-            'span[class*="switch" i]',
-            'div[class*="Switch" i]',
-            'label[class*="switch" i]',
-            'label:has-text("deposit limit")',
-            'label:has-text("I\'ve looked at my deposit limit")',
-            'input[type="checkbox"]',
-            '[data-component*="Switch" i]',
-            '[data-test*="switch" i]',
-            '[data-test*="deposit-limit" i]',
-            'span[class*="slider" i]',
-            'div[class*="toggle" i]'
-        ]
-        toggled = explicit_clicked
-        for switch_sel in ack_switch_selectors:
-            try:
-                switches = page.locator(switch_sel)
-                cnt = switches.count()
-                for i in range(cnt):
-                    s = switches.nth(i)
-                    if s.is_visible(timeout=200):
-                        # Check checked state
-                        aria_chk = s.get_attribute("aria-checked")
-                        is_input_chk = False
+            # Step 1: Deposit Limit Inputs & Presets (Set 100/200/300/400/500 if inputs exist)
+            deposit_limit_inputs = [
+                'input[data-test*="deposit-limit" i]',
+                'input[data-test*="amount" i]',
+                'input[name*="limit" i]',
+                'input[name*="amount" i]',
+                'input[placeholder*="limit" i]',
+                'input[placeholder*="amount" i]',
+                'input[placeholder*="£" i]',
+                'input[aria-label*="limit" i]',
+                'input[id*="limit" i]',
+                'input[type="number"]'
+            ]
+            random_limit = random.choice(["100", "200", "300", "400", "500"])
+            for inp_sel in deposit_limit_inputs:
+                try:
+                    inps = page.locator(inp_sel)
+                    for i in range(inps.count()):
+                        inp = inps.nth(i)
+                        if inp.is_visible(timeout=100):
+                            val = ""
+                            try:
+                                val = inp.input_value().strip()
+                            except Exception:
+                                pass
+                            if not val or val == "0":
+                                if log and pass_num == 1:
+                                    log.info(f"Filling deposit limit input {inp_sel} with £{random_limit}")
+                                inp.scroll_into_view_if_needed()
+                                inp.fill(random_limit)
+                                page.wait_for_timeout(100)
+                except Exception:
+                    continue
+
+            # Check for preset deposit limit pills/buttons (e.g. £500, £250, £100)
+            preset_limit_buttons = [
+                'button:has-text("£500")',
+                'button:has-text("500")',
+                'button:has-text("£250")',
+                'button:has-text("£100")',
+                'div[data-test*="preset"]:has-text("500")',
+                'div[class*="preset"]:has-text("500")'
+            ]
+            for p_sel in preset_limit_buttons:
+                try:
+                    p_btn = page.locator(p_sel).first
+                    if p_btn.is_visible(timeout=100):
+                        p_btn.click(force=True)
+                        page.wait_for_timeout(100)
+                        break
+                except Exception:
+                    continue
+
+            # Step 2: Explicit No Limit & Acknowledgment Radio / Option Selection
+            no_limit_triggers = [
+                'label:has-text("No I don\'t want to set a deposit limit")',
+                'span:has-text("No I don\'t want to set a deposit limit")',
+                'button:has-text("No I don\'t want to set a deposit limit")',
+                'div:has-text("No I don\'t want to set a deposit limit")',
+                'label:has-text("No, I don\'t want to set a deposit limit")',
+                'span:has-text("No, I don\'t want to set a deposit limit")',
+                'button:has-text("No, I don\'t want to set a deposit limit")',
+                'label:has-text("No I dont want to set a deposit limit")',
+                'span:has-text("No I dont want to set a deposit limit")',
+                'button:has-text("No I dont want to set a deposit limit")',
+                'label:has-text("I don\'t want to set a deposit limit")',
+                'span:has-text("I don\'t want to set a deposit limit")',
+                'button:has-text("I don\'t want to set a deposit limit")',
+                'label:has-text("I do not want to set a deposit limit")',
+                'span:has-text("I do not want to set a deposit limit")',
+                'button:has-text("I do not want to set a deposit limit")',
+                'label:has-text("I do not wish to set a deposit limit")',
+                'span:has-text("I do not wish to set a deposit limit")',
+                'label:has-text("No limit")',
+                'span:has-text("No limit")',
+                'button:has-text("No limit")',
+                '[data-test*="no-limit"]',
+                'label:has-text("No deposit limit")',
+                'span:has-text("No deposit limit")',
+                'button:has-text("No deposit limit")',
+                'label:has-text("Do not set a limit")',
+                'span:has-text("Do not set a limit")',
+                'label:has-text("I\'ve looked at my deposit limit")',
+                'span:has-text("I\'ve looked at my deposit limit")',
+                'label:has-text("I am happy with deposit limit")',
+                'span:has-text("I am happy with deposit limit")',
+                'label:has-text("happy with it")',
+                'span:has-text("happy with it")',
+                'input[value="no_limit"]',
+                'input[value="no"]',
+                'input[id*="no-limit"]',
+                'input[type="radio"][value*="no" i]',
+                'input[type="radio"][id*="no" i]'
+            ]
+            for trig in no_limit_triggers:
+                try:
+                    el = page.locator(trig).first
+                    if el.is_visible(timeout=100):
+                        if log and pass_num == 1:
+                            log.info(f"Selecting No Limit / Acknowledgment option: {trig}")
+                        el.scroll_into_view_if_needed()
                         try:
+                            box = el.bounding_box(timeout=200)
+                            if box:
+                                page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                        except Exception:
+                            pass
+                        el.click(force=True)
+                        page.wait_for_timeout(150)
+                except Exception:
+                    continue
+
+            # Step 3: Physical Switch / Toggle Interaction with Bounding Box & Keyboard Focus
+            ack_switch_selectors = [
+                '[role="switch"]',
+                'button[role="switch"]',
+                'span[class*="switch" i]',
+                'div[class*="Switch" i]',
+                'span[class*="Switch" i]',
+                'div[class*="switch" i]',
+                'label[class*="switch" i]',
+                'label[class*="Switch" i]',
+                'label:has-text("I\'ve looked at my deposit limit")',
+                'label:has-text("I am happy with deposit limit")',
+                'label:has-text("happy with it")',
+                'label:has-text("happy with deposit limit")',
+                'input[type="checkbox"]',
+                '[data-component*="Switch" i]',
+                '[data-test*="switch" i]',
+                '[data-test*="limit-toggle" i]',
+                '[data-test*="deposit-limit-switch" i]',
+                'span[class*="slider" i]',
+                'div[class*="toggle" i]',
+                'span[class*="toggle" i]'
+            ]
+            for switch_sel in ack_switch_selectors:
+                try:
+                    switches = page.locator(switch_sel)
+                    cnt = switches.count()
+                    for i in range(cnt):
+                        s = switches.nth(i)
+                        if s.is_visible(timeout=100):
                             tag = s.evaluate("e => e.tagName")
                             if tag == "INPUT":
-                                is_input_chk = s.is_checked()
+                                inp_type = (s.get_attribute("type") or "").lower()
+                                if inp_type not in ("checkbox", "radio"):
+                                    continue
+                                if s.is_checked():
+                                    continue
+
+                            aria_chk = s.get_attribute("aria-checked")
+                            if aria_chk != "true":
+                                if log and pass_num == 1:
+                                    log.info(f"Toggling Safer Gambling switch ON ({switch_sel} #{i})")
+                                s.scroll_into_view_if_needed()
+                                
+                                # Physical mouse click at center
+                                try:
+                                    box = s.bounding_box(timeout=200)
+                                    if box:
+                                        page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                                except Exception:
+                                    pass
+                                s.click(force=True)
+                                
+                                # Keyboard toggle fallback
+                                try:
+                                    s.focus()
+                                    page.keyboard.press("Space")
+                                except Exception:
+                                    pass
+                                
+                                page.wait_for_timeout(150)
+                except Exception:
+                    continue
+
+            # Step 4: Deep JavaScript & React Fiber State Injection
+            try:
+                page.evaluate("""() => {
+                    // 1. Force native checkboxes via React prototype setter
+                    const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+                    checkboxes.forEach(cb => {
+                        try {
+                            const proto = window.HTMLInputElement.prototype;
+                            const desc = Object.getOwnPropertyDescriptor(proto, 'checked');
+                            if (desc && desc.set) {
+                                desc.set.call(cb, true);
+                            } else {
+                                cb.checked = true;
+                            }
+                            cb.dispatchEvent(new Event('input', { bubbles: true }));
+                            cb.dispatchEvent(new Event('change', { bubbles: true }));
+                            cb.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                        } catch (e) {}
+                    });
+
+                    // 2. Force custom switches / buttons + trigger React internal Fiber handlers
+                    const switches = Array.from(document.querySelectorAll('[role="switch"], [class*="switch" i], [class*="Switch" i], [class*="toggle" i], [class*="Toggle" i]'));
+                    switches.forEach(sw => {
+                        try {
+                            sw.setAttribute('aria-checked', 'true');
+                            sw.classList.add('checked', 'active', 'on');
+                            
+                            ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'input', 'change'].forEach(evtName => {
+                                try {
+                                    sw.dispatchEvent(new Event(evtName, { bubbles: true, cancelable: true }));
+                                } catch (err) {}
+                            });
+
+                            if (sw.click) sw.click();
+
+                            // Invoke React Fiber event handlers directly if present
+                            for (const key in sw) {
+                                if (key.startsWith('__reactProps') || key.startsWith('__reactEvents') || key.startsWith('__reactFiber')) {
+                                    const props = sw[key];
+                                    if (props) {
+                                        if (typeof props.onChange === 'function') {
+                                            try { props.onChange({ target: { checked: true, value: true } }); } catch (e) {}
+                                        }
+                                        if (typeof props.onClick === 'function') {
+                                            try { props.onClick({ target: sw, currentTarget: sw }); } catch (e) {}
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (e) {}
+                    });
+
+                    // 3. Click any label or text container referencing deposit limits or acknowledgement
+                    const labels = Array.from(document.querySelectorAll('label, span, div, p, a'));
+                    labels.forEach(lbl => {
+                        const txt = (lbl.innerText || lbl.textContent || '').toLowerCase();
+                        if (txt.includes("i've looked at my deposit limit") || 
+                            txt.includes("i am happy with deposit limit") ||
+                            txt.includes("happy with it") || 
+                            txt.includes("happy with deposit limit") ||
+                            txt.includes("looked at my deposit limit") ||
+                            txt.includes("no, i don't want to set a deposit limit") ||
+                            txt.includes("no i don't want to set a deposit limit") ||
+                            txt.includes("no i dont want to set a deposit limit") ||
+                            txt.includes("rolling net deposit limit")) {
+                            try {
+                                lbl.click();
+                            } catch (e) {}
+                        }
+                    });
+                }""")
+                page.wait_for_timeout(300)
+            except Exception:
+                pass
+
+            # Step 5: Click Progression CTA (Next / Save & Continue / Done / Confirm / Accept / Acknowledge)
+            progression_buttons = [
+                'button[data-test="next-button"]',
+                'button[data-test="save-button"]',
+                'button[data-test="done-button"]',
+                'button[data-test="accept-button"]',
+                'button[data-test*="next" i]',
+                'button[data-test*="save" i]',
+                'button[data-test*="continue" i]',
+                'button[data-test*="done" i]',
+                'button[data-test*="confirm" i]',
+                'button:has-text("Next")',
+                'button:has-text("NEXT")',
+                'button:has-text("Save & Continue")',
+                'button:has-text("Save and Continue")',
+                'button:has-text("Save")',
+                'button:has-text("SAVE")',
+                'button:has-text("Done")',
+                'button:has-text("DONE")',
+                'button:has-text("Finish")',
+                'button:has-text("FINISH")',
+                'button:has-text("Continue")',
+                'button:has-text("CONTINUE")',
+                'button:has-text("Confirm")',
+                'button:has-text("CONFIRM")',
+                'button:has-text("I\'m Happy with this")',
+                'button:has-text("I am Happy with this")',
+                'button:has-text("I\'m happy with this")',
+                'button:has-text("Accept")',
+                'button:has-text("ACCEPT")',
+                'button:has-text("Acknowledge")',
+                'button:has-text("ACKNOWLEDGE")',
+                'button:has-text("Agree & Continue")',
+                'button:has-text("Got it")',
+                'button:has-text("Understood")',
+                'button:has-text("Agree & Join")',
+                'button:has-text("Skip")',
+                'button:has-text("Maybe later")',
+                'a:has-text("Skip")',
+                'button[type="submit"]'
+            ]
+            btn_clicked = False
+            for btn_sel in progression_buttons:
+                try:
+                    btn = page.locator(btn_sel).first
+                    if btn.is_visible(timeout=200):
+                        if log and pass_num == 1:
+                            log.info(f"Clicking Safer Gambling progression button: {btn_sel}")
+                        btn.scroll_into_view_if_needed()
+                        box = None
+                        try:
+                            box = btn.bounding_box(timeout=200)
                         except Exception:
                             pass
 
-                        # If not already checked / true, toggle it
-                        if aria_chk != "true" and not is_input_chk:
-                            if log:
-                                log.info(f"Toggling Safer Gambling switch ON ({switch_sel} #{i})")
-                            s.scroll_into_view_if_needed()
-                            s.click(force=True)
-                            page.wait_for_timeout(300)
-                            toggled = True
-                            break
-                        else:
-                            if log:
-                                log.info(f"Safer Gambling switch is already ON ({switch_sel} #{i})")
-                            toggled = True
-                            break
-                if toggled:
-                    break
-            except Exception:
-                continue
+                        try:
+                            btn.evaluate("""b => {
+                                b.removeAttribute('disabled');
+                                b.disabled = false;
+                                b.setAttribute('aria-disabled', 'false');
+                                b.classList.remove('disabled');
+                                if (b.click) b.click();
+                            }""")
+                        except Exception:
+                            pass
 
-        # 3. JavaScript Fallback: Scan DOM and ensure switch / radio is toggled ON
-        try:
-            page.evaluate("""() => {
-                const elements = Array.from(document.querySelectorAll('label, button, span, div, p, a, input[type="radio"], input[type="checkbox"], [role="switch"]'));
-                const target = elements.find(el => {
-                    const txt = (el.innerText || el.textContent || el.value || '').toLowerCase();
-                    return (txt.includes("don't want to set a deposit limit") || 
-                            txt.includes("dont want to set a deposit limit") ||
-                            txt.includes("no i don't want") ||
-                            txt.includes("no, i don't want") ||
-                            txt.includes("no i dont want") ||
-                            txt.includes("do not want to set a deposit limit") ||
-                            txt.includes("do not wish to set a deposit limit") ||
-                            txt.includes("i've looked at my deposit limit") ||
-                            txt.includes("no deposit limit") ||
-                            txt.includes("no limit"));
-                });
-                if (target) {
-                    target.click();
-                }
-                const sw = document.querySelector('[role="switch"], [class*="switch" i], [class*="Switch" i], input[type="checkbox"]');
-                if (sw && sw.getAttribute('aria-checked') !== 'true') {
-                    sw.setAttribute('aria-checked', 'true');
-                    sw.dispatchEvent(new Event('change', { bubbles: true }));
-                    sw.dispatchEvent(new Event('input', { bubbles: true }));
-                    sw.click();
-                }
-            }""")
-            page.wait_for_timeout(400)
-        except Exception:
-            pass
+                        if box:
+                            try:
+                                page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                            except Exception:
+                                pass
 
-        # 4. Click the progression CTA (Next / Save & Continue / Done / Confirm)
-        progression_buttons = [
-            'button[data-test="next-button"]',
-            'button[data-test="save-button"]',
-            'button[data-test="done-button"]',
-            'button[data-test*="next" i]',
-            'button[data-test*="save" i]',
-            'button[data-test*="continue" i]',
-            'button:has-text("Next")',
-            'button:has-text("NEXT")',
-            'button:has-text("Save & Continue")',
-            'button:has-text("Save and Continue")',
-            'button:has-text("Save")',
-            'button:has-text("SAVE")',
-            'button:has-text("Done")',
-            'button:has-text("DONE")',
-            'button:has-text("Finish")',
-            'button:has-text("FINISH")',
-            'button:has-text("Continue")',
-            'button:has-text("CONTINUE")',
-            'button:has-text("Confirm")',
-            'button:has-text("CONFIRM")',
-            'button:has-text("Agree & Join")',
-            'button:has-text("Skip")',
-            'button:has-text("Maybe later")',
-            'a:has-text("Skip")',
-            'button[type="submit"]'
-        ]
-        btn_clicked = False
-        for btn_sel in progression_buttons:
-            try:
-                btn = page.locator(btn_sel).first
-                if btn.is_visible(timeout=300):
-                    if log:
-                        log.info(f"Clicking Safer Gambling progression button: {btn_sel}")
-                    btn.scroll_into_view_if_needed()
-                    try:
-                        btn.evaluate("b => b.removeAttribute('disabled')")
-                    except Exception:
-                        pass
-                    btn.click(force=True)
-                    page.wait_for_timeout(1500)
-                    btn_clicked = True
-                    break
-            except Exception:
-                continue
+                        try:
+                            if btn.is_visible(timeout=100):
+                                btn.click(force=True, timeout=500)
+                        except Exception:
+                            pass
+                        page.wait_for_timeout(500)
+                        btn_clicked = True
+                        break
+                except Exception:
+                    continue
 
-        # Fallback progression button click via JavaScript
-        if not btn_clicked:
-            try:
-                page.evaluate("""() => {
-                    const btns = Array.from(document.querySelectorAll('button, a, input[type="submit"]'));
-                    const nextBtn = btns.find(b => {
-                        const t = (b.innerText || b.textContent || b.value || '').trim().toLowerCase();
-                        const dt = (b.getAttribute('data-test') || '').toLowerCase();
-                        return ['next', 'save & continue', 'save and continue', 'save', 'done', 'finish', 'confirm', 'continue', 'agree & join', 'skip'].includes(t) ||
-                               dt.includes('next') || dt.includes('save') || dt.includes('continue') || dt.includes('done');
-                    });
-                    if (nextBtn) {
-                        nextBtn.removeAttribute('disabled');
-                        nextBtn.click();
-                    }
-                }""")
-                page.wait_for_timeout(1500)
-            except Exception:
-                pass
+            # Fallback progression button click via JavaScript with React Fiber invocation
+            if not btn_clicked:
+                try:
+                    page.evaluate("""() => {
+                        const btns = Array.from(document.querySelectorAll('button, a, input[type="submit"]'));
+                        const nextBtn = btns.find(b => {
+                            const t = (b.innerText || b.textContent || b.value || '').trim().toLowerCase();
+                            const dt = (b.getAttribute('data-test') || '').toLowerCase();
+                            return ['next', 'save & continue', 'save and continue', 'save', 'done', 'finish', 'confirm', 'continue', 'agree & join', 'accept', 'acknowledge', 'got it', 'understood', 'skip'].includes(t) ||
+                                   dt.includes('next') || dt.includes('save') || dt.includes('continue') || dt.includes('done') || dt.includes('accept');
+                        });
+                        if (nextBtn) {
+                            nextBtn.removeAttribute('disabled');
+                            nextBtn.setAttribute('aria-disabled', 'false');
+                            nextBtn.classList.remove('disabled');
+                            
+                            // Direct React Fiber click invocation
+                            for (const key in nextBtn) {
+                                if (key.startsWith('__reactProps') || key.startsWith('__reactEvents') || key.startsWith('__reactFiber')) {
+                                    const props = nextBtn[key];
+                                    if (props && typeof props.onClick === 'function') {
+                                        try { props.onClick({ target: nextBtn, currentTarget: nextBtn }); } catch (e) {}
+                                    }
+                                }
+                            }
+                            nextBtn.click();
+                        }
+                    }""")
+                    page.wait_for_timeout(1000)
+                except Exception:
+                    pass
+
+            # Verification: Check if modal has closed
+            modal_still_open = False
+            for sel in modal_selectors[:8]:
+                try:
+                    if page.locator(sel).first.is_visible(timeout=100):
+                        modal_still_open = True
+                        break
+                except Exception:
+                    continue
+
+            if not modal_still_open:
+                if log:
+                    log.info(f"Playbook Safer Gambling modal successfully completed and dismissed on pass {pass_num}!")
+                return True
+
+            page.wait_for_timeout(500)
 
         return True
     except Exception as ex:

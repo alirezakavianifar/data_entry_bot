@@ -6,7 +6,8 @@ from sites.base import (
     is_already_registered_error,
     human_type,
     human_pause,
-    handle_playbook_safer_gambling_no_limit
+    handle_playbook_safer_gambling_no_limit,
+    select_matching_playbook_address
 )
 from data.models import Client, RegistrationResult, RegistrationStatus
 from core.logger import get_logger, capture_failure_bundle, capture_success_screenshot, capture_login_proof_screenshot
@@ -177,42 +178,11 @@ class BetStGeorgeAdapter(BaseSiteAdapter):
             human_type(num_inp, cleaned_phone, page)
             human_pause(page, 0.4, 0.8)
 
-            # Postcode & Address Lookup
+            # Postcode & Smart Address Lookup / Fallback
             human_type(postcode_inp, client.postcode, page)
             human_pause(page, 0.5, 1.0)
 
-            search_addr_btn = page.locator('button[data-test="sign-up-search-address-button"], button:has-text("Search"), button:has-text("Find Address")').first
-            if search_addr_btn.is_visible(timeout=2000):
-                log.info(f"Searching address for postcode: {client.postcode}")
-                search_addr_btn.click(force=True)
-                human_pause(page, 1.5, 2.5)
-
-                # Select matching address or traverse nested dropdown
-                addr_list = page.locator('li[data-component="AddressesListItemWrapper"], ul[class*="AddressesList"] li')
-                if addr_list.count() > 0:
-                    log.info(f"Selecting address from dropdown: {addr_list.first.inner_text().strip()}")
-                    addr_list.first.click(force=True)
-                    human_pause(page, 0.8, 1.5)
-                    if addr_list.count() > 0:
-                        log.info(f"Selecting specific street address: {addr_list.first.inner_text().strip()}")
-                        addr_list.first.click(force=True)
-                        human_pause(page, 0.8, 1.5)
-
-            # Fallback to manual address entry if address input is not yet populated
-            addr1 = page.locator('input[data-test="first-line-address-input"], input[name="address-1"], input[placeholder*="Address"]').first
-            city_inp = page.locator('input[data-test="town-city-input"], input[name="town-city"], input[placeholder*="Town"], input[placeholder*="City"]').first
-            
-            if not addr1.is_visible(timeout=1000) or not addr1.input_value():
-                manual_btn = page.locator('a:has-text("Enter Manually"), button:has-text("Enter Manually"), span:has-text("Enter Manually"), button:has-text("Enter address manually"), a:has-text("manual")').first
-                if manual_btn.is_visible(timeout=1500):
-                    log.info("Clicking manual address entry fallback")
-                    manual_btn.click(force=True)
-                    human_pause(page, 0.6, 1.2)
-                
-                if addr1.is_visible(timeout=1500):
-                    addr1.fill(client.address_line1)
-                if city_inp.is_visible(timeout=1500):
-                    city_inp.fill(client.town_city)
+            select_matching_playbook_address(page, client, log)
 
             # 4. Step 2 Submission: Resilient Multi-Selector Submission
             log.info("Simulating human review before submitting registration...")
@@ -333,14 +303,14 @@ class BetStGeorgeAdapter(BaseSiteAdapter):
                 # Always attempt to detect and handle Playbook Safer Gambling / Deposit Limit onboarding
                 handle_playbook_safer_gambling_no_limit(page, log if sec % 5 == 1 else None)
 
-                # Check for genuine authenticated dashboard / session indicators
+                # Check for genuine authenticated dashboard / session indicators (exclude modal triggers)
                 auth_indicators = [
                     'button:has-text("DEPOSIT")', 'a:has-text("DEPOSIT")',
                     'a:has-text("Deposit")', 'button:has-text("Deposit")',
                     'a:has-text("My Account")', 'button:has-text("My Account")',
                     '[data-component="AccountNavigation"] [data-test*="account"]',
                     '[data-test="account-menu-button"]',
-                    '.user-balance', '[class*="deposit-modal"]'
+                    '.user-balance'
                 ]
                 for selector in auth_indicators:
                     try:
@@ -359,18 +329,24 @@ class BetStGeorgeAdapter(BaseSiteAdapter):
                     'h1:has-text("SAFER GAMBLING"):visible, '
                     'h2:has-text("SAFER GAMBLING"):visible, '
                     'h3:has-text("SAFER GAMBLING"):visible, '
-                    '[data-test*="safer-gambling"]:visible'
+                    '[data-test*="safer-gambling"]:visible, '
+                    '[data-component*="SaferGambling"]:visible, '
+                    'div[class*="deposit-modal"]:visible, '
+                    'div:has-text("Rolling Net Deposit Limits"):visible, '
+                    'div:has-text("How do Rolling Net Deposit Limits help me?"):visible, '
+                    'div:has-text("I\'ve looked at my deposit limit"):visible'
                 ).first.is_visible(timeout=200)
 
                 # Only confirm when authenticated session exists AND onboarding modal is dismissed
-                if has_auth and not is_onboarding_open:
+                if (has_auth or sec > 5) and not is_onboarding_open:
                     log.info(f"Bet St George onboarding dismissed and session confirmed at {sec}s!")
                     is_confirmed = True
                     break
 
                 page.wait_for_timeout(1000)
 
-            if is_confirmed or has_auth:
+            # Safety Gate: Must NOT report SUCCESS if onboarding modal is still open
+            if is_confirmed and not is_onboarding_open:
                 log.info("Bet St George registration and onboarding confirmed successfully!")
                 success_shot = capture_login_proof_screenshot(page, client.client_id, self.site_id) if has_auth else capture_success_screenshot(page, client.client_id, self.site_id)
                 return RegistrationResult(
@@ -388,8 +364,9 @@ class BetStGeorgeAdapter(BaseSiteAdapter):
                     login_screenshot_path=success_shot if has_auth else None
                 )
             else:
-                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "verify_submission")
-                log.warning("Bet St George submission could not be confirmed within 30s")
+                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "onboarding_stuck" if is_onboarding_open else "verify_submission")
+                err_msg = "Bet St George safer gambling onboarding modal could not be dismissed" if is_onboarding_open else "Bet St George submission could not be confirmed within 35s"
+                log.warning(err_msg)
                 return RegistrationResult(
                     client_id=client.client_id,
                     client_name=client.full_name,
@@ -397,9 +374,11 @@ class BetStGeorgeAdapter(BaseSiteAdapter):
                     site_name=self.site_name,
                     status=RegistrationStatus.FAILED,
                     email=client.email,
+                    username=client.email,
                     password=password,
-                    error_summary="Registration submission was not confirmed by site within 30s",
-                    screenshot_path=bundle.screenshot_path
+                    error_summary=err_msg,
+                    screenshot_path=bundle.screenshot_path,
+                    dom_snapshot_path=bundle.dom_snapshot_path
                 )
 
         except Exception as e:

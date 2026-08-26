@@ -17,8 +17,11 @@ Includes both a **Modern Desktop GUI Application** and a **Command-Line Interfac
     - **`🖼️ Proof` Button:** Opens the high-resolution logged-in screen proof immediately in the default viewer or Explorer.
     - **`📋 Copy` Button:** One-click clipboard copy for the generated password.
 - **Playbook Platforms & Responsible Gambling No-Deposit Limit Automation:**
-  - Physically completes and dismisses the post-Step 2 Safer Gambling / Deposit Limit onboarding form across all Playbook Engineering platforms (**Star Sports**, **Bet St George**, **BresBet**, **Planet Sport Bet**).
-  - Explicitly selects the *"No I don't want to set a deposit limit"* option, switches acknowledgment toggles ON (`aria-checked="true"`), and drives progression CTAs (`Next`, `Save & Continue`, `Done`) through multiple layers (Playwright clicks + synthetic DOM dispatch).
+  - Physically completes and dismisses the post-Step 2 Safer Gambling / Rolling Net Deposit Limit onboarding form across all Playbook Engineering platforms (**Star Sports**, **Bet St George**, **BresBet**, **Planet Sport Bet**).
+  - Handles internal scroll containers by actively scrolling explanatory text boxes to the bottom (`scrollTop = scrollHeight`) to unlock below-the-fold controls.
+  - Supports automatic deposit limit input population (£100–£500) and preset chips, or explicit selection of *"No I don't want to set a deposit limit"*.
+  - Switches acknowledgment toggles ON (`aria-checked="true"`), strips disabled attributes, and drives progression CTAs (`Next`, `I'm Happy with this`, `Accept`, `Save & Continue`, `Done`) through multi-vector Playwright + synthetic DOM + React Fiber execution.
+  - **Smart Postcode Lookup & Address Matching (`select_matching_playbook_address`):** Tokenizes client address lines and uses confidence scoring (house numbers +50, street tokens +15 each, mismatch penalties -40) to select exact addresses rather than blind first-item clicks, with automatic fallback to manual address typing.
   - Prevents premature browser teardown and incomplete signups by actively polling until the onboarding container is fully dismissed and authentic session credentials/balances are established.
 - **🛡️ Anti-Bot Stealth Shield & Device Fingerprint Masking:**
   - Complete elimination of `navigator.webdriver` and CDP automation flags.
