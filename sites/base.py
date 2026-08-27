@@ -1020,13 +1020,19 @@ class BaseSiteAdapter(ABC):
         log = get_logger(site_id=self.site_id, step="navigate")
         log.info(f"Navigating to {url}")
         
-        resp = page.goto(url, wait_until="domcontentloaded", timeout=25000)
-        page.wait_for_timeout(2000)
-        
-        status = resp.status if resp else 200
-        if status == 403 or self.check_geoblock(page):
-            log.warning(f"Geoblock / 403 detected on {self.site_name}")
-            return False
+        try:
+            resp = page.goto(url, wait_until="domcontentloaded", timeout=35000)
+            page.wait_for_timeout(2000)
+            status = resp.status if resp else 200
+            if status == 403 or self.check_geoblock(page):
+                log.warning(f"Geoblock / 403 detected on {self.site_name}")
+                return False
+        except Exception as e:
+            log.warning(f"Initial page navigation warning ({e}), checking if DOM is accessible...")
+            page.wait_for_timeout(2000)
+            if self.check_geoblock(page):
+                log.warning(f"Geoblock / 403 detected on {self.site_name}")
+                return False
         return True
 
     def accept_cookies(self, page: Page) -> bool:
