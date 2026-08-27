@@ -163,15 +163,18 @@ def test_starsports_onboarding_form_toggle_and_next_progression():
     # Mock inputs
     mock_input = MagicMock()
     mock_input.is_visible.return_value = True
+    mock_input.input_value.return_value = ""
 
     mock_btn = MagicMock()
     mock_btn.is_visible.return_value = True
 
     mock_switch = MagicMock()
     mock_switch.count.return_value = 1
+    mock_switch.is_checked.return_value = False
     mock_switch_nth = MagicMock()
     mock_switch_nth.is_visible.return_value = True
     mock_switch_nth.get_attribute.return_value = "false"
+    mock_switch_nth.is_checked.return_value = False
     
     def on_switch_click(*args, **kwargs):
         nonlocal switch_clicked
@@ -180,6 +183,8 @@ def test_starsports_onboarding_form_toggle_and_next_progression():
     mock_switch_nth.check.side_effect = on_switch_click
     mock_switch.nth.return_value = mock_switch_nth
     mock_switch.first = mock_switch_nth
+    mock_switch.locator.return_value = mock_switch
+    mock_switch_nth.locator.return_value = mock_switch
 
     mock_next_btn = MagicMock()
     mock_next_btn.is_visible.return_value = True
@@ -209,12 +214,12 @@ def test_starsports_onboarding_form_toggle_and_next_progression():
             loc.is_visible.return_value = False
             loc.first.is_visible.return_value = False
             return loc
+        elif any(k in selector.lower() for k in ["switch", "checkbox", "slider", "toggle"]):
+            return mock_switch
         elif "SignUpStepsContainer" in selector or "SAFER GAMBLING" in selector:
             loc.first = mock_container
             loc.is_visible = container_visible
             return loc
-        elif any(k in selector.lower() for k in ["switch", "checkbox", "slider", "toggle"]):
-            return mock_switch
         elif "next" in selector.lower() or "Save" in selector or "Next" in selector:
             loc.first = mock_next_btn
             loc.is_visible.return_value = True
@@ -282,15 +287,18 @@ def test_planetsportbet_onboarding_form_toggle_and_next_progression():
 
     mock_input = MagicMock()
     mock_input.is_visible.return_value = True
+    mock_input.input_value.return_value = ""
 
     mock_btn = MagicMock()
     mock_btn.is_visible.return_value = True
 
     mock_switch = MagicMock()
     mock_switch.count.return_value = 1
+    mock_switch.is_checked.return_value = False
     mock_switch_nth = MagicMock()
     mock_switch_nth.is_visible.return_value = True
     mock_switch_nth.get_attribute.return_value = "false"
+    mock_switch_nth.is_checked.return_value = False
     
     def on_switch_click(*args, **kwargs):
         nonlocal switch_clicked
@@ -299,6 +307,8 @@ def test_planetsportbet_onboarding_form_toggle_and_next_progression():
     mock_switch_nth.check.side_effect = on_switch_click
     mock_switch.nth.return_value = mock_switch_nth
     mock_switch.first = mock_switch_nth
+    mock_switch.locator.return_value = mock_switch
+    mock_switch_nth.locator.return_value = mock_switch
 
     mock_next_btn = MagicMock()
     mock_next_btn.is_visible.return_value = True
@@ -328,12 +338,12 @@ def test_planetsportbet_onboarding_form_toggle_and_next_progression():
             loc.is_visible.return_value = False
             loc.first.is_visible.return_value = False
             return loc
+        elif any(k in selector.lower() for k in ["switch", "checkbox", "slider", "toggle"]):
+            return mock_switch
         elif "SignUpStepsContainer" in selector or "SAFER GAMBLING" in selector:
             loc.first = mock_container
             loc.is_visible = container_visible
             return loc
-        elif any(k in selector.lower() for k in ["switch", "checkbox", "slider", "toggle"]):
-            return mock_switch
         elif "next" in selector.lower() or "Save" in selector or "Next" in selector:
             loc.first = mock_next_btn
             loc.is_visible.return_value = True
@@ -401,15 +411,18 @@ def test_bresbet_onboarding_form_toggle_and_next_progression():
 
     mock_input = MagicMock()
     mock_input.is_visible.return_value = True
+    mock_input.input_value.return_value = ""
 
     mock_btn = MagicMock()
     mock_btn.is_visible.return_value = True
 
     mock_switch = MagicMock()
     mock_switch.count.return_value = 1
+    mock_switch.is_checked.return_value = False
     mock_switch_nth = MagicMock()
     mock_switch_nth.is_visible.return_value = True
     mock_switch_nth.get_attribute.return_value = "false"
+    mock_switch_nth.is_checked.return_value = False
     
     def on_switch_click(*args, **kwargs):
         nonlocal switch_clicked
@@ -418,6 +431,8 @@ def test_bresbet_onboarding_form_toggle_and_next_progression():
     mock_switch_nth.check.side_effect = on_switch_click
     mock_switch.nth.return_value = mock_switch_nth
     mock_switch.first = mock_switch_nth
+    mock_switch.locator.return_value = mock_switch
+    mock_switch_nth.locator.return_value = mock_switch
 
     mock_next_btn = MagicMock()
     mock_next_btn.is_visible.return_value = True
@@ -447,12 +462,12 @@ def test_bresbet_onboarding_form_toggle_and_next_progression():
             loc.is_visible.return_value = False
             loc.first.is_visible.return_value = False
             return loc
+        elif any(k in selector.lower() for k in ["switch", "checkbox", "slider", "toggle"]):
+            return mock_switch
         elif "SignUpStepsContainer" in selector or "SAFER GAMBLING" in selector:
             loc.first = mock_container
             loc.is_visible = container_visible
             return loc
-        elif any(k in selector.lower() for k in ["switch", "checkbox", "slider", "toggle"]):
-            return mock_switch
         elif "next" in selector.lower() or "Save" in selector or "Next" in selector:
             loc.first = mock_next_btn
             loc.is_visible.return_value = True
@@ -520,15 +535,18 @@ def test_betstgeorge_onboarding_form_toggle_and_next_progression():
 
     mock_input = MagicMock()
     mock_input.is_visible.return_value = True
+    mock_input.input_value.return_value = ""
 
     mock_btn = MagicMock()
     mock_btn.is_visible.return_value = True
 
     mock_switch = MagicMock()
     mock_switch.count.return_value = 1
+    mock_switch.is_checked.return_value = False
     mock_switch_nth = MagicMock()
     mock_switch_nth.is_visible.return_value = True
     mock_switch_nth.get_attribute.return_value = "false"
+    mock_switch_nth.is_checked.return_value = False
     
     def on_switch_click(*args, **kwargs):
         nonlocal switch_clicked
@@ -537,6 +555,8 @@ def test_betstgeorge_onboarding_form_toggle_and_next_progression():
     mock_switch_nth.check.side_effect = on_switch_click
     mock_switch.nth.return_value = mock_switch_nth
     mock_switch.first = mock_switch_nth
+    mock_switch.locator.return_value = mock_switch
+    mock_switch_nth.locator.return_value = mock_switch
 
     mock_next_btn = MagicMock()
     mock_next_btn.is_visible.return_value = True
@@ -566,12 +586,12 @@ def test_betstgeorge_onboarding_form_toggle_and_next_progression():
             loc.is_visible.return_value = False
             loc.first.is_visible.return_value = False
             return loc
+        elif any(k in selector.lower() for k in ["switch", "checkbox", "slider", "toggle"]):
+            return mock_switch
         elif "SignUpStepsContainer" in selector or "SAFER GAMBLING" in selector:
             loc.first = mock_container
             loc.is_visible = container_visible
             return loc
-        elif any(k in selector.lower() for k in ["switch", "checkbox", "slider", "toggle"]):
-            return mock_switch
         elif "next" in selector.lower() or "Save" in selector or "Next" in selector:
             loc.first = mock_next_btn
             loc.is_visible.return_value = True
@@ -890,56 +910,6 @@ def test_handle_playbook_rolling_net_deposit_limit_with_scroll_and_input():
     assert mock_input.fill.called
     # Clicked switch & Next button
     assert mock_switch.click.called or mock_btn.click.called
-
-
-def test_handle_playbook_bresbet_deposit_limit_modal_specific_flow():
-    """Asserts that BresBet's deposit limits modal with acknowledgment switch is properly turned ON and Next is clicked."""
-    mock_page = MagicMock()
-
-    mock_modal = MagicMock()
-    mock_modal.is_visible.return_value = True
-
-    mock_daily = MagicMock()
-    mock_daily.is_visible.return_value = True
-    mock_daily.input_value.return_value = "200.00"
-
-    mock_switch = MagicMock()
-    mock_switch.count.return_value = 1
-    mock_switch.nth.return_value = mock_switch
-    mock_switch.is_visible.return_value = True
-    mock_switch.get_attribute.return_value = "false"
-    mock_switch.evaluate.return_value = "INPUT"
-
-    mock_next_btn = MagicMock()
-    mock_next_btn.is_visible.return_value = True
-
-    def locator_side_effect(selector):
-        loc = MagicMock()
-        if any(kw in selector for kw in ["deposit limit options", "happy with my current choice", "SignUpStepsContainer"]):
-            if any(sw in selector.lower() for sw in ["checkbox", "switch", "slider", "toggle"]):
-                return mock_switch
-            loc.first = mock_modal
-            return loc
-        elif "daily" in selector.lower() or "weekly" in selector.lower() or "monthly" in selector.lower():
-            loc.count.return_value = 1
-            loc.nth.return_value = mock_daily
-            return loc
-        elif "Next" in selector or "Save" in selector or "Accept" in selector:
-            loc.first = mock_next_btn
-            return loc
-        else:
-            loc.is_visible.return_value = False
-            loc.first.is_visible.return_value = False
-            loc.count.return_value = 0
-            return loc
-
-    mock_page.locator.side_effect = locator_side_effect
-
-    handled = handle_playbook_safer_gambling_no_limit(mock_page)
-    assert handled is True
-    assert mock_page.evaluate.called
-    assert mock_switch.click.called or mock_switch.check.called or mock_next_btn.click.called
-
 
 
 

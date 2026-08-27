@@ -367,7 +367,7 @@ def select_matching_playbook_address(page: Page, client: Client, log=None) -> bo
                         log.info(f"No confident address match in dropdown for '{client.address_line1}' (best score: {best_score}). Will use manual entry.")
 
         # Address Verification & Fallback: Guarantee address_line1 and town_city match client details
-        addr1 = page.locator('input[data-test="address-line-1-input"], input[data-test="first-line-address-input"], input[name="address-1"], input[placeholder*="Address"]').first
+        addr1 = page.locator('input[data-test="address-line-1-input"], input[data-test="first-line-address-input"], input[name="address-1"], input[name="address_line_1"], input[placeholder*="Address"]').first
         city_inp = page.locator('input[data-test="town-city-input"], input[name="town-city"], input[placeholder*="Town"], input[placeholder*="City"]').first
 
         # Check if address line 1 is visible and accurately filled
@@ -398,13 +398,15 @@ def select_matching_playbook_address(page: Page, client: Client, log=None) -> bo
                 manual_btn.click(force=True)
                 human_pause(page, 0.6, 1.2)
 
-            if addr1.is_visible(timeout=1500):
+            addr1 = page.locator('input[data-test="address-line-1-input"], input[data-test="first-line-address-input"], input[name="address-1"], input[name="address_line_1"], input[placeholder*="Address"]').first
+            if addr1.is_visible(timeout=2000):
                 addr1.scroll_into_view_if_needed()
                 addr1.fill("")
                 human_type(addr1, client.address_line1, page)
                 if log:
                     log.info(f"Filled Address Line 1: '{client.address_line1}'")
 
+            city_inp = page.locator('input[data-test="town-city-input"], input[name="town-city"], input[placeholder*="Town"], input[placeholder*="City"]').first
             if city_inp.is_visible(timeout=1500):
                 city_val = ""
                 try:
@@ -439,23 +441,22 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
     import random
     try:
         modal_selectors = [
-            'aside[data-test="SignUpStepsContainer"]:has-text("SAFER GAMBLING")',
-            'aside[data-test="SignUpStepsContainer"]:has-text("DEPOSIT LIMIT")',
-            'aside[data-test="SignUpStepsContainer"]:has-text("deposit limit")',
-            'aside[data-test="SignUpStepsContainer"]:has-text("Net deposit limits")',
-            'aside[data-test="SignUpStepsContainer"]:has-text("happy with my current choice")',
-            'aside[data-test="SignUpStepsContainer"]:has-text("deposit limit options")',
+            'aside[data-test="SignUpStepsContainer"]',
+            '[data-test="SignUpStepsContainer"]',
             'aside[data-test="SignUpStepsContainer"] legend:has-text("SAFER GAMBLING")',
-            'aside[data-test="SignUpStepsContainer"] h1:has-text("SAFER GAMBLING")',
             'aside[data-test="SignUpStepsContainer"] h2:has-text("SAFER GAMBLING")',
+            'aside[data-test="SignUpStepsContainer"] h1:has-text("SAFER GAMBLING")',
             'aside[data-test="SignUpStepsContainer"] h3:has-text("SAFER GAMBLING")',
-            'aside[data-test="SignUpStepsContainer"] input[data-test*="limit" i]',
-            'aside[data-test="SignUpStepsContainer"] [role="switch"]',
-            '[data-test="SignUpStepsContainer"] [role="switch"]',
-            '[data-test="SignUpStepsContainer"] input[data-test*="limit" i]',
-            '[role="dialog"]:has-text("SAFER GAMBLING")',
-            '[role="dialog"]:has-text("deposit limit")',
-            'div[class*="deposit-modal" i]'
+            'aside[data-test="SignUpStepsContainer"] h4:has-text("SAFER GAMBLING")',
+            'aside[data-test="SignUpStepsContainer"] [data-test*="safer-gambling"]',
+            'aside[data-test="SignUpStepsContainer"] [data-component*="SaferGambling"]',
+            'aside[data-test="SignUpStepsContainer"] [data-component="Toggle"]',
+            'aside[data-test="SignUpStepsContainer"] [class*="ToggleWrapper"]',
+            'aside[data-test="SignUpStepsContainer"] button[data-test="next-button"]',
+            'div[role="dialog"]:has-text("SAFER GAMBLING")',
+            'div[role="dialog"]:has-text("deposit limit")',
+            'div[class*="modal"]:has-text("SAFER GAMBLING")',
+            'div[class*="drawer"]:has-text("SAFER GAMBLING")'
         ]
 
         is_modal_present = False
@@ -473,7 +474,7 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
         if log:
             log.info("Playbook Safer Gambling / Rolling Deposit Limit modal detected — executing aggressive scroll, toggle & progression...")
 
-        max_passes = 4
+        max_passes = 1
         for pass_num in range(1, max_passes + 1):
             # Step 0: AGGRESSIVE SCROLL TO BOTTOM OF ALL INTERNAL CONTAINERS
             # UKGC / Playbook requires scrolling to the bottom of the terms container before enabling controls
@@ -598,39 +599,24 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
                 except Exception:
                     continue
 
-            # Step 2: Helper to check if DEPOSIT LIMIT switch is ALREADY active (Excludes Reality Check!)
+            # Step 2: Helper to check if DEPOSIT LIMIT switch is ALREADY active
             def is_switch_active() -> bool:
                 try:
                     res = page.evaluate("""() => {
-                        const ackPhrases = [
-                            'happy with my current choice',
-                            'deposit limit options',
-                            'even if i\'ve decided',
-                            'even if i’ve decided',
-                            'i\'ve looked at my deposit limit',
-                            'i’ve looked at my deposit limit',
-                            'i am happy with deposit limit',
-                            'happy with deposit limit',
-                            'happy with it'
-                        ];
-                        const allEls = Array.from(document.querySelectorAll('div, label, span, p'));
-                        for (const el of allEls) {
-                            const txt = (el.innerText || el.textContent || '').toLowerCase();
-                            if (ackPhrases.some(p => txt.includes(p)) && !txt.includes('reality check')) {
-                                let parent = el;
-                                for (let d = 0; d < 5 && parent; d++) {
-                                    const cb = parent.querySelector('input[type="checkbox"]');
-                                    if (cb && cb.checked) return true;
-                                    const sw = parent.querySelector('[data-component="Toggle"], [role="switch"], label[class*="Slider" i], span[class*="Slider" i], [class*="switch" i], [class*="Switch" i]');
-                                    if (sw) {
-                                        const ariaChecked = sw.getAttribute('aria-checked');
-                                        if (ariaChecked === 'true' || sw.classList.contains('checked') || sw.classList.contains('active') || sw.classList.contains('on')) {
-                                            return true;
-                                        }
-                                    }
-                                    parent = parent.parentElement;
-                                }
+                        const sgContainer = document.querySelector('aside[data-test="SignUpStepsContainer"]');
+                        if (!sgContainer) return true; // Modal is closed
+
+                        const nextBtn = sgContainer.querySelector('button[data-test="next-button"], button[data-test*="next" i]');
+                        if (nextBtn) {
+                            const style = window.getComputedStyle(nextBtn);
+                            if (style.opacity === '1' || style.cursor === 'pointer') {
+                                return true;
                             }
+                        }
+
+                        const cb = sgContainer.querySelector('input[type="checkbox"][data-component="WithConfig"], div[data-component="Toggle"] input[type="checkbox"], label[class*="SliderWrapper"] input[type="checkbox"]');
+                        if (cb && cb.checked) {
+                            return true;
                         }
                         return false;
                     }""")
@@ -688,154 +674,79 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
                 except Exception:
                     continue
 
-            # Step 4: Physical Switch / Toggle Interaction (Specifically target Deposit Limit Acknowledgment!)
-            # Target the single active acknowledgment toggle once
+            # Step 4: Physical Switch / Toggle Interaction (Strictly Idempotent!)
             if not is_switch_active():
-                ack_switch_selectors = [
-                    'div:has-text("happy with my current choice") input[type="checkbox"]',
-                    'div:has-text("happy with my current choice") label:has(input[type="checkbox"])',
-                    'div:has-text("happy with my current choice") [data-component="Toggle"]',
-                    'div:has-text("happy with my current choice") [role="switch"]',
-                    'div:has-text("deposit limit options") input[type="checkbox"]',
-                    'div:has-text("deposit limit options") label:has(input[type="checkbox"])',
-                    'div:has-text("deposit limit options") [data-component="Toggle"]',
-                    'div:has-text("deposit limit options") [role="switch"]',
-                    'div:has-text("I\'ve looked at my deposit limit") input[type="checkbox"]',
-                    'div:has-text("I\'ve looked at my deposit limit") label:has(input[type="checkbox"])',
-                    'div:has-text("I\'ve looked at my deposit limit") [data-component="Toggle"]',
-                    'div:has-text("I\'ve looked at my deposit limit") [role="switch"]',
-                    'div:has-text("I’ve looked at my deposit limit") input[type="checkbox"]',
-                    'div:has-text("I’ve looked at my deposit limit") [role="switch"]',
-                    '[data-test*="deposit-limit-switch" i]',
-                    '[data-test*="limit-toggle" i]',
-                    'input[type="checkbox"][data-component="WithConfig"]',
-                    'div[data-component="Toggle"]',
-                    'label[class*="SliderWrapper" i]',
-                    'span[class*="Slider" i]',
-                    '[role="switch"]',
-                    'input[type="checkbox"]'
-                ]
-                for switch_sel in ack_switch_selectors:
-                    try:
-                        s = page.locator(switch_sel).first
-                        if s.is_visible(timeout=100):
-                            # Skip switches that belong to "reality check"
-                            try:
-                                res_r = s.evaluate("""el => {
-                                    const parent = el.closest('div, label, section') || el.parentElement;
-                                    const txt = (parent ? (parent.innerText || parent.textContent || '') : '').toLowerCase();
-                                    return txt.includes('reality check');
-                                }""")
-                                if res_r is True:
-                                    continue
-                            except Exception:
-                                pass
+                slider = page.locator('aside[data-test="SignUpStepsContainer"] span[data-component="WithConfig"][class*="Slider"], aside[data-test="SignUpStepsContainer"] span[class*="Slider"], aside[data-test="SignUpStepsContainer"] label[class*="SliderWrapper"]').first
+                if slider.is_visible(timeout=300):
+                    if log:
+                        log.info("Toggling Deposit Limit switch ON via slider click")
+                    slider.scroll_into_view_if_needed()
+                    slider.click(force=True)
+                    page.wait_for_timeout(300)
 
-                            tag = str(s.evaluate("e => e.tagName") or "").upper()
-                            if tag == "INPUT":
-                                inp_type = (s.get_attribute("type") or "").lower()
-                                if inp_type == "checkbox":
-                                    if s.is_checked():
-                                        break
-                                    if log and pass_num == 1:
-                                        log.info(f"Checking Deposit Limit checkbox ({switch_sel})")
-                                    try:
-                                        s.check(force=True)
-                                    except Exception:
-                                        s.click(force=True)
-                                    page.wait_for_timeout(200)
-                                    break
+            # Step 5: Fallback JavaScript & React Prototype State Setter if not yet active
+            if not is_switch_active():
+                try:
+                    page.evaluate("""() => {
+                        const ackPhrases = [
+                            'happy with my current choice',
+                            'deposit limit options',
+                            'even if i\'ve decided',
+                            'even if i’ve decided',
+                            'i\'ve looked at my deposit limit',
+                            'i’ve looked at my deposit limit',
+                            'i am happy with deposit limit',
+                            'happy with deposit limit',
+                            'happy with it'
+                        ];
 
-                            aria_chk = s.get_attribute("aria-checked")
-                            if aria_chk == "true":
-                                break
+                        const allEls = Array.from(document.querySelectorAll('label, div, span, p, h3, h4'));
+                        for (const el of allEls) {
+                            const txt = (el.innerText || el.textContent || '').toLowerCase();
+                            if (ackPhrases.some(p => txt.includes(p)) && !txt.includes('reality check')) {
+                                let parent = el;
+                                let foundTarget = null;
+                                for (let depth = 0; depth < 5 && parent; depth++) {
+                                    foundTarget = parent.querySelector('input[type="checkbox"], [data-component="Toggle"], label[class*="SliderWrapper"], span[class*="Slider"]');
+                                    if (foundTarget) break;
+                                    parent = parent.parentElement;
+                                }
 
-                            if log and pass_num == 1:
-                                log.info(f"Toggling Deposit Limit switch ON ({switch_sel})")
-                            s.scroll_into_view_if_needed()
+                                const target = foundTarget || el;
+                                const cb = target.tagName === 'INPUT' ? target : (parent ? parent.querySelector('input[type="checkbox"]') : null);
+                                if (cb && !cb.checked) {
+                                    const proto = window.HTMLInputElement.prototype;
+                                    const desc = Object.getOwnPropertyDescriptor(proto, 'checked');
+                                    if (desc && desc.set) {
+                                        desc.set.call(cb, true);
+                                    } else {
+                                        cb.checked = true;
+                                    }
+                                    cb.dispatchEvent(new Event('input', { bubbles: true }));
+                                    cb.dispatchEvent(new Event('change', { bubbles: true }));
+                                }
 
-                            try:
-                                s.click(force=True)
-                            except Exception:
-                                pass
-                            page.wait_for_timeout(200)
-                            break
-                    except Exception:
-                        continue
+                                target.setAttribute('aria-checked', 'true');
+                                target.classList.add('checked', 'active', 'on');
 
-            # Step 5: Idempotent JavaScript & React Fiber State Injection (Target Deposit Limit acknowledgment once)
-            try:
-                page.evaluate("""() => {
-                    const ackPhrases = [
-                        'happy with my current choice',
-                        'deposit limit options',
-                        'even if i\'ve decided',
-                        'even if i’ve decided',
-                        'i\'ve looked at my deposit limit',
-                        'i’ve looked at my deposit limit',
-                        'i am happy with deposit limit',
-                        'happy with deposit limit',
-                        'happy with it'
-                    ];
-
-                    const allEls = Array.from(document.querySelectorAll('label, div, span, p, h3, h4'));
-                    const matchingNodes = allEls.filter(el => {
-                        const txt = (el.innerText || el.textContent || '').toLowerCase();
-                        return ackPhrases.some(p => txt.includes(p)) && !txt.includes('reality check');
-                    });
-
-                    if (matchingNodes.length === 0) return;
-
-                    // Sort by shortest text to find innermost specific node
-                    matchingNodes.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
-                    const specificNode = matchingNodes[0];
-
-                    let target = null;
-                    let parent = specificNode;
-                    for (let depth = 0; depth < 5 && parent; depth++) {
-                        target = parent.querySelector('input[type="checkbox"], [data-component="Toggle"], label[class*="Slider" i], span[class*="Slider" i], [role="switch"], [class*="switch" i], [class*="Switch" i]');
-                        if (target) break;
-                        parent = parent.parentElement;
-                    }
-
-                    if (!target) return;
-
-                    const cb = target.tagName === 'INPUT' && target.type === 'checkbox' ? target : (parent ? parent.querySelector('input[type="checkbox"]') : null);
-                    const isChecked = (cb && cb.checked) || target.getAttribute('aria-checked') === 'true' || target.classList.contains('checked') || target.classList.contains('active') || target.classList.contains('on');
-
-                    if (!isChecked) {
-                        if (cb) {
-                            const proto = window.HTMLInputElement.prototype;
-                            const desc = Object.getOwnPropertyDescriptor(proto, 'checked');
-                            if (desc && desc.set) {
-                                desc.set.call(cb, true);
-                            } else {
-                                cb.checked = true;
-                            }
-                            cb.dispatchEvent(new Event('input', { bubbles: true }));
-                            cb.dispatchEvent(new Event('change', { bubbles: true }));
-                        }
-
-                        target.setAttribute('aria-checked', 'true');
-                        target.classList.add('checked', 'active', 'on');
-
-                        for (const key in target) {
-                            if (key.startsWith('__reactProps') || key.startsWith('__reactEvents') || key.startsWith('__reactFiber')) {
-                                const props = target[key];
-                                if (props) {
-                                    if (typeof props.onChange === 'function') {
-                                        try { props.onChange({ target: { checked: true, value: true } }); } catch (e) {}
+                                for (const key in target) {
+                                    if (key.startsWith('__reactProps') || key.startsWith('__reactEvents') || key.startsWith('__reactFiber')) {
+                                        const props = target[key];
+                                        if (props) {
+                                            if (typeof props.onChange === 'function') {
+                                                try { props.onChange({ target: { checked: true, value: true } }); } catch (e) {}
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                }""")
-                page.wait_for_timeout(400)
-            except Exception:
-                pass
+                    }""")
+                    page.wait_for_timeout(150)
+                except Exception:
+                    pass
 
-            # Step 6: Click Progression CTA (Next / Save & Continue / Done / Confirm / Accept / Acknowledge)
+            # Step 5: Click Progression CTA (Next / Save & Continue / Done / Confirm / Accept / Acknowledge)
             progression_buttons = [
                 'button[data-test="next-button"]',
                 'button[data-test="save-button"]',
@@ -1020,19 +931,13 @@ class BaseSiteAdapter(ABC):
         log = get_logger(site_id=self.site_id, step="navigate")
         log.info(f"Navigating to {url}")
         
-        try:
-            resp = page.goto(url, wait_until="domcontentloaded", timeout=35000)
-            page.wait_for_timeout(2000)
-            status = resp.status if resp else 200
-            if status == 403 or self.check_geoblock(page):
-                log.warning(f"Geoblock / 403 detected on {self.site_name}")
-                return False
-        except Exception as e:
-            log.warning(f"Initial page navigation warning ({e}), checking if DOM is accessible...")
-            page.wait_for_timeout(2000)
-            if self.check_geoblock(page):
-                log.warning(f"Geoblock / 403 detected on {self.site_name}")
-                return False
+        resp = page.goto(url, wait_until="domcontentloaded", timeout=25000)
+        page.wait_for_timeout(2000)
+        
+        status = resp.status if resp else 200
+        if status == 403 or self.check_geoblock(page):
+            log.warning(f"Geoblock / 403 detected on {self.site_name}")
+            return False
         return True
 
     def accept_cookies(self, page: Page) -> bool:

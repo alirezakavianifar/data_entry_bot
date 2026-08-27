@@ -46,26 +46,25 @@ class BresbetAdapter(BaseSiteAdapter):
                 cookie_btn.click(force=True)
                 page.wait_for_timeout(1000)
 
-            # Check if sign up modal or landing form is open
-            email_inp = page.locator('input[data-test="landing-page-email-input"], input[data-test="email-input"], input[placeholder*="Email"]').first
-            if not email_inp.is_visible(timeout=2000):
+            # 2. Step 1: Credentials & Sign Up drawer detection
+            email_sel = 'input[data-test="landing-page-email-input"], input[data-test="email-input"], input[placeholder*="Email"], input[type="email"]'
+            email_inp = page.locator(email_sel).first
+            if not email_inp.is_visible(timeout=6000):
                 reg_btn = page.locator('a[data-test="account-navigation-signup-link"], a:has-text("Sign Up"), button:has-text("Sign Up")').first
-                if reg_btn.is_visible(timeout=2000):
+                if reg_btn.is_visible(timeout=3000):
                     log.info("Clicking Sign Up CTA on BresBet")
                     reg_btn.click(force=True)
-                    page.wait_for_timeout(1500)
+                    page.wait_for_timeout(2000)
 
-            # If drawer opened with initial 'Create Account' CTA, click it to show credential inputs
-            initial_create_btn = page.locator('aside[data-test="SignUpStepsContainer"] button:has-text("Create Account"), [data-test="SignUpStepsContainer"] button:has-text("Create Account"), button[data-test="create-account-button"]').first
-            if initial_create_btn.is_visible(timeout=1500):
-                initial_create_btn.click(force=True)
-                page.wait_for_timeout(1000)
+            try:
+                page.wait_for_selector(email_sel, timeout=15000, state="visible")
+            except Exception:
+                pass
 
-            # 2. Step 1: Credentials
-            email_inp = page.locator('input[data-test="landing-page-email-input"], input[data-test="email-input"], input[placeholder*="Email"]').first
+            email_inp = page.locator(email_sel).first
             pwd_inp = page.locator('input[data-test="landing-page-password-input"], input[data-test="create-password-input"], input[placeholder*="password"]').first
 
-            if not email_inp.is_visible(timeout=4000) or not pwd_inp.is_visible(timeout=4000):
+            if not email_inp.is_visible(timeout=3000) or not pwd_inp.is_visible(timeout=3000):
                 bundle = capture_failure_bundle(page, client.client_id, self.site_id, "step1_inputs_missing")
                 return RegistrationResult(
                     client_id=client.client_id,
@@ -91,14 +90,7 @@ class BresbetAdapter(BaseSiteAdapter):
                 human_pause(page, 2.0, 3.5)
 
             # Check for Step 1 validation errors
-            step1_err = page.locator(
-                'aside[data-test="SignUpStepsContainer"] div[class*="error"]:visible, '
-                'aside[data-test="SignUpStepsContainer"] span[class*="error"]:visible, '
-                'aside[data-test="SignUpStepsContainer"] p[class*="error"]:visible, '
-                'aside[data-test="SignUpStepsContainer"] [data-test*="error"]:visible, '
-                'aside[data-test="SignUpStepsContainer"] [class*="errorMessage"]:visible, '
-                '[data-test="SignUpStepsContainer"] [class*="error"]:visible'
-            ).first
+            step1_err = page.locator('div[class*="error"]:visible, span[class*="error"]:visible, p[class*="error"]:visible, [data-test*="error"]:visible, [class*="errorMessage"]:visible, :has-text("already exists"):visible').first
             if step1_err.is_visible(timeout=1500):
                 err_txt = step1_err.inner_text().strip()
                 if is_already_registered_error(err_txt) or any(kw in err_txt.lower() for kw in ["already exists", "in use", "already registered", "taken"]):
@@ -133,6 +125,11 @@ class BresbetAdapter(BaseSiteAdapter):
                     )
 
             # 3. Step 2: Personal Details
+            try:
+                page.wait_for_selector('input[data-test="first-name-input"]', timeout=15000, state="visible")
+            except Exception:
+                pass
+
             fn_inp = page.locator('input[data-test="first-name-input"]').first
             ln_inp = page.locator('input[data-test="last-name-input"]').first
             day_inp = page.locator('input[data-test="day-input"]').first
@@ -141,7 +138,7 @@ class BresbetAdapter(BaseSiteAdapter):
             num_inp = page.locator('input[data-test="number-input"]').first
             postcode_inp = page.locator('input[data-test="postcode-input"]').first
 
-            if not fn_inp.is_visible(timeout=5000):
+            if not fn_inp.is_visible(timeout=3000):
                 dup_err = page.locator('div[class*="error"]:visible, span[class*="error"]:visible, p[class*="error"]:visible, [data-test*="error"]:visible, :has-text("already exists"):visible, :has-text("in use"):visible').first
                 if dup_err.is_visible(timeout=1000):
                     raw_txt = dup_err.inner_text().strip().replace("\n", " - ")
@@ -285,15 +282,12 @@ class BresbetAdapter(BaseSiteAdapter):
                         continue
 
                 # Check if signup form / onboarding modal is still active in the DOM
-                is_onboarding_open = False
-                for onb_sel in ['aside[data-test="SignUpStepsContainer"]', '[data-test="SignUpStepsContainer"]']:
-                    try:
-                        loc = page.locator(onb_sel).first
-                        if loc.is_visible(timeout=100):
-                            is_onboarding_open = True
-                            break
-                    except Exception:
-                        continue
+                is_onboarding_open = page.locator(
+                    'aside[data-test="SignUpStepsContainer"]:visible, '
+                    '[data-test="SignUpStepsContainer"]:visible, '
+                    'div[role="dialog"]:has-text("SAFER GAMBLING"):visible, '
+                    'div[class*="modal"]:has-text("SAFER GAMBLING"):visible'
+                ).first.is_visible(timeout=200)
 
                 # Only confirm when authenticated session exists AND onboarding modal is dismissed
                 if (has_auth or sec > 5) and not is_onboarding_open:

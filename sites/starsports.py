@@ -84,14 +84,7 @@ class StarSportsAdapter(BaseSiteAdapter):
                 human_pause(page, 2.0, 3.5)
 
             # Check for Step 1 validation errors
-            step1_err = page.locator(
-                'aside[data-test="SignUpStepsContainer"] div[class*="error"]:visible, '
-                'aside[data-test="SignUpStepsContainer"] span[class*="error"]:visible, '
-                'aside[data-test="SignUpStepsContainer"] p[class*="error"]:visible, '
-                'aside[data-test="SignUpStepsContainer"] [data-test*="error"]:visible, '
-                'aside[data-test="SignUpStepsContainer"] [class*="errorMessage"]:visible, '
-                '[data-test="SignUpStepsContainer"] [class*="error"]:visible'
-            ).first
+            step1_err = page.locator('div[class*="error"], span[class*="error"], p[class*="error"], [data-test*="error"], [class*="errorMessage"], [class*="error"]').first
             if step1_err.is_visible(timeout=1500):
                 err_txt = step1_err.inner_text().strip()
                 if is_already_registered_error(err_txt) or any(kw in err_txt.lower() for kw in ["already exists", "in use", "already registered", "taken"]):
@@ -276,15 +269,26 @@ class StarSportsAdapter(BaseSiteAdapter):
                         continue
 
                 # Check if signup form / onboarding modal is still active in the DOM
-                is_onboarding_open = False
-                for onb_sel in ['aside[data-test="SignUpStepsContainer"]', '[data-test="SignUpStepsContainer"]']:
-                    try:
-                        loc = page.locator(onb_sel).first
-                        if loc.is_visible(timeout=100):
-                            is_onboarding_open = True
-                            break
-                    except Exception:
-                        continue
+                is_onboarding_open = page.locator(
+                    'aside[data-test="SignUpStepsContainer"]:visible, '
+                    '[data-test="SignUpStepsContainer"]:visible, '
+                    'button[data-test="agree-and-join-button"]:visible, '
+                    'legend:has-text("SAFER GAMBLING"):visible, '
+                    'h1:has-text("SAFER GAMBLING"):visible, '
+                    'h2:has-text("SAFER GAMBLING"):visible, '
+                    'h3:has-text("SAFER GAMBLING"):visible, '
+                    '[data-test*="safer-gambling"]:visible, '
+                    '[data-component*="SaferGambling"]:visible, '
+                    'div[class*="deposit-modal"]:visible, '
+                    'div[class*="deposit-limit" i]:visible, '
+                    'div:has-text("Net deposit limits"):visible, '
+                    'div:has-text("Rolling Net Deposit Limits"):visible, '
+                    'div:has-text("How do Rolling Net Deposit Limits help me?"):visible, '
+                    'div:has-text("deposit limit options"):visible, '
+                    'div:has-text("happy with my current choice"):visible, '
+                    'div:has-text("I\'ve looked at my deposit limit"):visible, '
+                    'div:has-text("I’ve looked at my deposit limit"):visible'
+                ).first.is_visible(timeout=200)
 
                 # Only confirm when authenticated session exists AND onboarding modal is dismissed
                 if (has_auth or sec > 5) and not is_onboarding_open:
