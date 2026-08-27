@@ -451,10 +451,17 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
             'aside[data-test="SignUpStepsContainer"]:has-text("DEPOSIT LIMIT")',
             'aside[data-test="SignUpStepsContainer"]:has-text("deposit limit")',
             'div[class*="deposit-modal"]',
+            'div[class*="deposit-limit" i]',
             'div:has-text("Set a deposit limit")',
+            'div:has-text("Net deposit limits")',
+            'h2:has-text("Net deposit limits")',
+            'h1:has-text("Net deposit limits")',
+            'h3:has-text("Net deposit limits")',
             'label:has-text("deposit limit")',
             ':has-text("Rolling Net Deposit Limits")',
             ':has-text("Rolling Net Deposit Limit")',
+            ':has-text("Net deposit limits")',
+            ':has-text("Net deposit limit")',
             ':has-text("rolling net 1-day deposit limit")',
             ':has-text("How do Rolling Net Deposit Limits help me?")',
             ':has-text("Can I set my own Rolling Net Deposit Limits?")',
@@ -466,6 +473,11 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
             ':has-text("I do not wish to set a deposit limit")',
             ':has-text("I don\'t want to set a deposit limit")',
             ':has-text("I\'ve looked at my deposit limit")',
+            ':has-text("I’ve looked at my deposit limit")',
+            ':has-text("deposit limit options")',
+            ':has-text("happy with my current choice")',
+            ':has-text("even if I\'ve decided not to set one")',
+            ':has-text("even if I’ve decided not to set one")',
             ':has-text("I am happy with deposit limit")',
             ':has-text("happy with deposit limit")',
             ':has-text("happy with it")'
@@ -547,39 +559,50 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
             except Exception:
                 pass
 
-            # Step 1: Deposit Limit Inputs & Presets (Set 100/200/300/400/500 if inputs exist)
-            deposit_limit_inputs = [
-                'input[data-test*="deposit-limit" i]',
-                'input[data-test*="amount" i]',
-                'input[name*="limit" i]',
-                'input[name*="amount" i]',
-                'input[placeholder*="limit" i]',
-                'input[placeholder*="amount" i]',
-                'input[placeholder*="£" i]',
-                'input[aria-label*="limit" i]',
-                'input[id*="limit" i]',
-                'input[type="number"]'
-            ]
-            random_limit = random.choice(["100", "200", "300", "400", "500"])
-            for inp_sel in deposit_limit_inputs:
-                try:
-                    inps = page.locator(inp_sel)
-                    for i in range(inps.count()):
-                        inp = inps.nth(i)
-                        if inp.is_visible(timeout=100):
-                            val = ""
-                            try:
-                                val = inp.input_value().strip()
-                            except Exception:
-                                pass
-                            if not val or val == "0":
-                                if log and pass_num == 1:
-                                    log.info(f"Filling deposit limit input {inp_sel} with £{random_limit}")
-                                inp.scroll_into_view_if_needed()
-                                inp.fill(random_limit)
-                                page.wait_for_timeout(100)
-                except Exception:
-                    continue
+            # Step 1: Deposit Limit Inputs & Presets
+            # If multi-period inputs exist (Daily, Weekly, Monthly), set hierarchical amounts (100, 500, 1000)
+            # only if completely blank so cross-field validation (Daily < Weekly < Monthly) is always satisfied.
+            try:
+                daily_inputs = page.locator('input[name*="daily" i], input[id*="daily" i], input[data-test*="daily" i]')
+                for i in range(daily_inputs.count()):
+                    try:
+                        inp = daily_inputs.nth(i)
+                        if inp.is_visible(timeout=100) and not (inp.input_value() or "").strip():
+                            inp.fill("100")
+                    except Exception:
+                        pass
+
+                weekly_inputs = page.locator('input[name*="weekly" i], input[id*="weekly" i], input[data-test*="weekly" i]')
+                for i in range(weekly_inputs.count()):
+                    try:
+                        inp = weekly_inputs.nth(i)
+                        if inp.is_visible(timeout=100) and not (inp.input_value() or "").strip():
+                            inp.fill("500")
+                    except Exception:
+                        pass
+
+                monthly_inputs = page.locator('input[name*="monthly" i], input[id*="monthly" i], input[data-test*="monthly" i]')
+                for i in range(monthly_inputs.count()):
+                    try:
+                        inp = monthly_inputs.nth(i)
+                        if inp.is_visible(timeout=100) and not (inp.input_value() or "").strip():
+                            inp.fill("1000")
+                    except Exception:
+                        pass
+
+                # For single deposit limit amount fields (e.g. Star Sports single limit box)
+                generic_inputs = page.locator('input[data-test*="deposit-limit" i]:not([name*="daily" i]):not([name*="weekly" i]):not([name*="monthly" i]), input[data-test*="amount" i]:not([name*="daily" i]):not([name*="weekly" i]):not([name*="monthly" i])')
+                for i in range(generic_inputs.count()):
+                    try:
+                        inp = generic_inputs.nth(i)
+                        if inp.is_visible(timeout=100) and not (inp.input_value() or "").strip():
+                            if log and pass_num == 1:
+                                log.info("Filling deposit limit input with £200")
+                            inp.fill("200")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
             # Check for preset deposit limit pills/buttons (e.g. £500, £250, £100)
             preset_limit_buttons = [
@@ -600,7 +623,47 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
                 except Exception:
                     continue
 
-            # Step 2: Explicit No Limit & Acknowledgment Radio / Option Selection
+            # Step 2: Helper to check if DEPOSIT LIMIT switch is ALREADY active (Excludes Reality Check!)
+            def is_switch_active() -> bool:
+                try:
+                    res = page.evaluate("""() => {
+                        const ackPhrases = [
+                            'happy with my current choice',
+                            'deposit limit options',
+                            'even if i\'ve decided',
+                            'even if i’ve decided',
+                            'i\'ve looked at my deposit limit',
+                            'i’ve looked at my deposit limit',
+                            'i am happy with deposit limit',
+                            'happy with deposit limit',
+                            'happy with it'
+                        ];
+                        const allEls = Array.from(document.querySelectorAll('div, label, span, p'));
+                        for (const el of allEls) {
+                            const txt = (el.innerText || el.textContent || '').toLowerCase();
+                            if (ackPhrases.some(p => txt.includes(p)) && !txt.includes('reality check')) {
+                                let parent = el;
+                                for (let d = 0; d < 5 && parent; d++) {
+                                    const cb = parent.querySelector('input[type="checkbox"]');
+                                    if (cb && cb.checked) return true;
+                                    const sw = parent.querySelector('[data-component="Toggle"], [role="switch"], label[class*="Slider" i], span[class*="Slider" i], [class*="switch" i], [class*="Switch" i]');
+                                    if (sw) {
+                                        const ariaChecked = sw.getAttribute('aria-checked');
+                                        if (ariaChecked === 'true' || sw.classList.contains('checked') || sw.classList.contains('active') || sw.classList.contains('on')) {
+                                            return true;
+                                        }
+                                    }
+                                    parent = parent.parentElement;
+                                }
+                            }
+                        }
+                        return false;
+                    }""")
+                    return res is True
+                except Exception:
+                    return False
+
+            # Step 3: Explicit No Limit Radio / Option Selection (For sites with Yes/No radio buttons)
             no_limit_triggers = [
                 'label:has-text("No I don\'t want to set a deposit limit")',
                 'span:has-text("No I don\'t want to set a deposit limit")',
@@ -629,12 +692,6 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
                 'button:has-text("No deposit limit")',
                 'label:has-text("Do not set a limit")',
                 'span:has-text("Do not set a limit")',
-                'label:has-text("I\'ve looked at my deposit limit")',
-                'span:has-text("I\'ve looked at my deposit limit")',
-                'label:has-text("I am happy with deposit limit")',
-                'span:has-text("I am happy with deposit limit")',
-                'label:has-text("happy with it")',
-                'span:has-text("happy with it")',
                 'input[value="no_limit"]',
                 'input[value="no"]',
                 'input[id*="no-limit"]',
@@ -649,87 +706,154 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
                             log.info(f"Selecting No Limit / Acknowledgment option: {trig}")
                         el.scroll_into_view_if_needed()
                         try:
-                            box = el.bounding_box(timeout=200)
-                            if box:
-                                page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                            el.click(force=True)
                         except Exception:
                             pass
-                        el.click(force=True)
                         page.wait_for_timeout(150)
                 except Exception:
                     continue
 
-            # Step 3: Physical Switch / Toggle Interaction with Bounding Box & Keyboard Focus
-            ack_switch_selectors = [
-                '[role="switch"]',
-                'button[role="switch"]',
-                'span[class*="switch" i]',
-                'div[class*="Switch" i]',
-                'span[class*="Switch" i]',
-                'div[class*="switch" i]',
-                'label[class*="switch" i]',
-                'label[class*="Switch" i]',
-                'label:has-text("I\'ve looked at my deposit limit")',
-                'label:has-text("I am happy with deposit limit")',
-                'label:has-text("happy with it")',
-                'label:has-text("happy with deposit limit")',
-                'input[type="checkbox"]',
-                '[data-component*="Switch" i]',
-                '[data-test*="switch" i]',
-                '[data-test*="limit-toggle" i]',
-                '[data-test*="deposit-limit-switch" i]',
-                'span[class*="slider" i]',
-                'div[class*="toggle" i]',
-                'span[class*="toggle" i]'
-            ]
-            for switch_sel in ack_switch_selectors:
-                try:
-                    switches = page.locator(switch_sel)
-                    cnt = switches.count()
-                    for i in range(cnt):
-                        s = switches.nth(i)
-                        if s.is_visible(timeout=100):
-                            tag = s.evaluate("e => e.tagName")
-                            if tag == "INPUT":
-                                inp_type = (s.get_attribute("type") or "").lower()
-                                if inp_type not in ("checkbox", "radio"):
-                                    continue
-                                if s.is_checked():
-                                    continue
+            # Step 4: Physical Switch / Toggle Interaction (Specifically target Deposit Limit Acknowledgment!)
+            # Exclude raw text containers to prevent clicking non-interactive text labels
+            if not is_switch_active():
+                ack_switch_selectors = [
+                    'div:has-text("happy with my current choice") input[type="checkbox"]',
+                    'div:has-text("happy with my current choice") label:has(input[type="checkbox"])',
+                    'div:has-text("happy with my current choice") label[class*="Slider" i]',
+                    'div:has-text("happy with my current choice") span[class*="Slider" i]',
+                    'div:has-text("happy with my current choice") [data-component="Toggle"]',
+                    'div:has-text("happy with my current choice") [role="switch"]',
+                    'div:has-text("deposit limit options") input[type="checkbox"]',
+                    'div:has-text("deposit limit options") label:has(input[type="checkbox"])',
+                    'div:has-text("deposit limit options") label[class*="Slider" i]',
+                    'div:has-text("deposit limit options") span[class*="Slider" i]',
+                    'div:has-text("deposit limit options") [data-component="Toggle"]',
+                    'div:has-text("deposit limit options") [role="switch"]',
+                    'div:has-text("I\'ve looked at my deposit limit") input[type="checkbox"]',
+                    'div:has-text("I\'ve looked at my deposit limit") label:has(input[type="checkbox"])',
+                    'div:has-text("I\'ve looked at my deposit limit") label[class*="Slider" i]',
+                    'div:has-text("I\'ve looked at my deposit limit") span[class*="Slider" i]',
+                    'div:has-text("I\'ve looked at my deposit limit") [data-component="Toggle"]',
+                    'div:has-text("I\'ve looked at my deposit limit") [role="switch"]',
+                    'div:has-text("I’ve looked at my deposit limit") input[type="checkbox"]',
+                    'div:has-text("I’ve looked at my deposit limit") [role="switch"]',
+                    'label[class*="SliderWrapper" i]',
+                    'span[class*="Slider" i]',
+                    'input[type="checkbox"][data-component="WithConfig"]',
+                    'div[data-component="Toggle"]',
+                    'div[class*="ToggleWrapper" i]',
+                    '[data-test*="deposit-limit-switch" i]',
+                    '[data-test*="limit-toggle" i]',
+                    '[role="switch"]',
+                    'input[type="checkbox"]'
+                ]
+                switch_toggled = False
+                for switch_sel in ack_switch_selectors:
+                    try:
+                        switches = page.locator(switch_sel)
+                        cnt = switches.count()
+                        for i in range(cnt):
+                            s = switches.nth(i)
+                            if s.is_visible(timeout=100):
+                                # Skip switches that belong to "reality check"
+                                try:
+                                    res_r = s.evaluate("""el => {
+                                        const parent = el.closest('div, label, section') || el.parentElement;
+                                        const txt = (parent ? (parent.innerText || parent.textContent || '') : '').toLowerCase();
+                                        return txt.includes('reality check');
+                                    }""")
+                                    if res_r is True:
+                                        continue
+                                except Exception:
+                                    pass
 
-                            aria_chk = s.get_attribute("aria-checked")
-                            if aria_chk != "true":
+                                tag = s.evaluate("e => e.tagName")
+                                if tag == "INPUT":
+                                    inp_type = (s.get_attribute("type") or "").lower()
+                                    if inp_type not in ("checkbox", "radio"):
+                                        continue
+                                    if s.is_checked():
+                                        switch_toggled = True
+                                        break
+
+                                aria_chk = s.get_attribute("aria-checked")
+                                if aria_chk == "true":
+                                    switch_toggled = True
+                                    break
+
                                 if log and pass_num == 1:
-                                    log.info(f"Toggling Safer Gambling switch ON ({switch_sel} #{i})")
+                                    log.info(f"Toggling Deposit Limit switch ON ({switch_sel} #{i})")
                                 s.scroll_into_view_if_needed()
                                 
-                                # Physical mouse click at center
                                 try:
-                                    box = s.bounding_box(timeout=200)
-                                    if box:
-                                        page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                                    if tag == "INPUT" and (s.get_attribute("type") or "").lower() == "checkbox":
+                                        try:
+                                            s.check(force=True)
+                                        except Exception:
+                                            s.click(force=True)
+                                    else:
+                                        # If container has an input checkbox, also check it
+                                        try:
+                                            child_cb = s.locator('input[type="checkbox"]').first
+                                            if child_cb.is_visible(timeout=50) and not child_cb.is_checked():
+                                                child_cb.check(force=True)
+                                        except Exception:
+                                            pass
+                                        s.click(force=True)
                                 except Exception:
                                     pass
-                                s.click(force=True)
                                 
-                                # Keyboard toggle fallback
-                                try:
-                                    s.focus()
-                                    page.keyboard.press("Space")
-                                except Exception:
-                                    pass
-                                
-                                page.wait_for_timeout(150)
-                except Exception:
-                    continue
+                                page.wait_for_timeout(200)
+                                if is_switch_active():
+                                    switch_toggled = True
+                                    break
+                        if switch_toggled:
+                            break
+                    except Exception:
+                        continue
 
-            # Step 4: Deep JavaScript & React Fiber State Injection
+            # Step 5: Idempotent JavaScript & React Fiber State Injection (Target Deposit Limit acknowledgment once)
             try:
                 page.evaluate("""() => {
-                    // 1. Force native checkboxes via React prototype setter
-                    const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
-                    checkboxes.forEach(cb => {
-                        try {
+                    const ackPhrases = [
+                        'happy with my current choice',
+                        'deposit limit options',
+                        'even if i\'ve decided',
+                        'even if i’ve decided',
+                        'i\'ve looked at my deposit limit',
+                        'i’ve looked at my deposit limit',
+                        'i am happy with deposit limit',
+                        'happy with deposit limit',
+                        'happy with it'
+                    ];
+
+                    const allEls = Array.from(document.querySelectorAll('label, div, span, p, h3, h4'));
+                    const matchingNodes = allEls.filter(el => {
+                        const txt = (el.innerText || el.textContent || '').toLowerCase();
+                        return ackPhrases.some(p => txt.includes(p)) && !txt.includes('reality check');
+                    });
+
+                    if (matchingNodes.length === 0) return;
+
+                    // Sort by shortest text to find innermost specific node
+                    matchingNodes.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
+                    const specificNode = matchingNodes[0];
+
+                    let target = null;
+                    let parent = specificNode;
+                    for (let depth = 0; depth < 5 && parent; depth++) {
+                        target = parent.querySelector('input[type="checkbox"], [data-component="Toggle"], label[class*="Slider" i], span[class*="Slider" i], [role="switch"], [class*="switch" i], [class*="Switch" i]');
+                        if (target) break;
+                        parent = parent.parentElement;
+                    }
+
+                    if (!target) return;
+
+                    const cb = target.tagName === 'INPUT' && target.type === 'checkbox' ? target : (parent ? parent.querySelector('input[type="checkbox"]') : null);
+                    const isChecked = (cb && cb.checked) || target.getAttribute('aria-checked') === 'true' || target.classList.contains('checked') || target.classList.contains('active') || target.classList.contains('on');
+
+                    if (!isChecked) {
+                        if (cb) {
                             const proto = window.HTMLInputElement.prototype;
                             const desc = Object.getOwnPropertyDescriptor(proto, 'checked');
                             if (desc && desc.set) {
@@ -739,66 +863,35 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
                             }
                             cb.dispatchEvent(new Event('input', { bubbles: true }));
                             cb.dispatchEvent(new Event('change', { bubbles: true }));
-                            cb.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                        } catch (e) {}
-                    });
+                        }
 
-                    // 2. Force custom switches / buttons + trigger React internal Fiber handlers
-                    const switches = Array.from(document.querySelectorAll('[role="switch"], [class*="switch" i], [class*="Switch" i], [class*="toggle" i], [class*="Toggle" i]'));
-                    switches.forEach(sw => {
-                        try {
-                            sw.setAttribute('aria-checked', 'true');
-                            sw.classList.add('checked', 'active', 'on');
-                            
-                            ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'input', 'change'].forEach(evtName => {
-                                try {
-                                    sw.dispatchEvent(new Event(evtName, { bubbles: true, cancelable: true }));
-                                } catch (err) {}
-                            });
+                        target.setAttribute('aria-checked', 'true');
+                        target.classList.add('checked', 'active', 'on');
 
-                            if (sw.click) sw.click();
+                        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evtName => {
+                            try { target.dispatchEvent(new Event(evtName, { bubbles: true, cancelable: true })); } catch (err) {}
+                        });
 
-                            // Invoke React Fiber event handlers directly if present
-                            for (const key in sw) {
-                                if (key.startsWith('__reactProps') || key.startsWith('__reactEvents') || key.startsWith('__reactFiber')) {
-                                    const props = sw[key];
-                                    if (props) {
-                                        if (typeof props.onChange === 'function') {
-                                            try { props.onChange({ target: { checked: true, value: true } }); } catch (e) {}
-                                        }
-                                        if (typeof props.onClick === 'function') {
-                                            try { props.onClick({ target: sw, currentTarget: sw }); } catch (e) {}
-                                        }
+                        for (const key in target) {
+                            if (key.startsWith('__reactProps') || key.startsWith('__reactEvents') || key.startsWith('__reactFiber')) {
+                                const props = target[key];
+                                if (props) {
+                                    if (typeof props.onChange === 'function') {
+                                        try { props.onChange({ target: { checked: true, value: true } }); } catch (e) {}
+                                    }
+                                    if (typeof props.onClick === 'function') {
+                                        try { props.onClick({ target: target, currentTarget: target }); } catch (e) {}
                                     }
                                 }
                             }
-                        } catch (e) {}
-                    });
-
-                    // 3. Click any label or text container referencing deposit limits or acknowledgement
-                    const labels = Array.from(document.querySelectorAll('label, span, div, p, a'));
-                    labels.forEach(lbl => {
-                        const txt = (lbl.innerText || lbl.textContent || '').toLowerCase();
-                        if (txt.includes("i've looked at my deposit limit") || 
-                            txt.includes("i am happy with deposit limit") ||
-                            txt.includes("happy with it") || 
-                            txt.includes("happy with deposit limit") ||
-                            txt.includes("looked at my deposit limit") ||
-                            txt.includes("no, i don't want to set a deposit limit") ||
-                            txt.includes("no i don't want to set a deposit limit") ||
-                            txt.includes("no i dont want to set a deposit limit") ||
-                            txt.includes("rolling net deposit limit")) {
-                            try {
-                                lbl.click();
-                            } catch (e) {}
                         }
-                    });
+                    }
                 }""")
                 page.wait_for_timeout(300)
             except Exception:
                 pass
 
-            # Step 5: Click Progression CTA (Next / Save & Continue / Done / Confirm / Accept / Acknowledge)
+            # Step 6: Click Progression CTA (Next / Save & Continue / Done / Confirm / Accept / Acknowledge)
             progression_buttons = [
                 'button[data-test="next-button"]',
                 'button[data-test="save-button"]',
@@ -847,37 +940,26 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
                         if log and pass_num == 1:
                             log.info(f"Clicking Safer Gambling progression button: {btn_sel}")
                         btn.scroll_into_view_if_needed()
-                        box = None
-                        try:
-                            box = btn.bounding_box(timeout=200)
-                        except Exception:
-                            pass
-
+                        
+                        # Enable button in DOM if visually disabled
                         try:
                             btn.evaluate("""b => {
                                 b.removeAttribute('disabled');
                                 b.disabled = false;
                                 b.setAttribute('aria-disabled', 'false');
                                 b.classList.remove('disabled');
-                                if (b.click) b.click();
                             }""")
                         except Exception:
                             pass
 
-                        if box:
-                            try:
-                                page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
-                            except Exception:
-                                pass
-
                         try:
-                            if btn.is_visible(timeout=100):
-                                btn.click(force=True, timeout=500)
+                            btn.click(force=True, timeout=1000)
+                            btn_clicked = True
                         except Exception:
                             pass
                         page.wait_for_timeout(500)
-                        btn_clicked = True
-                        break
+                        if btn_clicked:
+                            break
                 except Exception:
                     continue
 
@@ -922,6 +1004,20 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
                         break
                 except Exception:
                     continue
+
+            # Close any stray popup tabs (like GamCare, GamStop, Begambleaware)
+            try:
+                if hasattr(page, "context") and hasattr(page.context, "pages"):
+                    for p in page.context.pages:
+                        if p != page:
+                            p_url = (p.url or "").lower()
+                            if any(bad in p_url for bad in ["gamcare", "gamstop", "begambleaware", "about:blank"]):
+                                try:
+                                    p.close()
+                                except Exception:
+                                    pass
+            except Exception:
+                pass
 
             if not modal_still_open:
                 if log:

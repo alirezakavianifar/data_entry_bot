@@ -283,9 +283,14 @@ class BresbetAdapter(BaseSiteAdapter):
                     '[data-test*="safer-gambling"]:visible, '
                     '[data-component*="SaferGambling"]:visible, '
                     'div[class*="deposit-modal"]:visible, '
+                    'div[class*="deposit-limit" i]:visible, '
+                    'div:has-text("Net deposit limits"):visible, '
                     'div:has-text("Rolling Net Deposit Limits"):visible, '
                     'div:has-text("How do Rolling Net Deposit Limits help me?"):visible, '
-                    'div:has-text("I\'ve looked at my deposit limit"):visible'
+                    'div:has-text("deposit limit options"):visible, '
+                    'div:has-text("happy with my current choice"):visible, '
+                    'div:has-text("I\'ve looked at my deposit limit"):visible, '
+                    'div:has-text("I’ve looked at my deposit limit"):visible'
                 ).first.is_visible(timeout=200)
 
                 # Only confirm when authenticated session exists AND onboarding modal is dismissed
