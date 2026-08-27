@@ -714,100 +714,76 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
                     continue
 
             # Step 4: Physical Switch / Toggle Interaction (Specifically target Deposit Limit Acknowledgment!)
-            # Exclude raw text containers to prevent clicking non-interactive text labels
+            # Target the single active acknowledgment toggle once
             if not is_switch_active():
                 ack_switch_selectors = [
                     'div:has-text("happy with my current choice") input[type="checkbox"]',
                     'div:has-text("happy with my current choice") label:has(input[type="checkbox"])',
-                    'div:has-text("happy with my current choice") label[class*="Slider" i]',
-                    'div:has-text("happy with my current choice") span[class*="Slider" i]',
                     'div:has-text("happy with my current choice") [data-component="Toggle"]',
                     'div:has-text("happy with my current choice") [role="switch"]',
                     'div:has-text("deposit limit options") input[type="checkbox"]',
                     'div:has-text("deposit limit options") label:has(input[type="checkbox"])',
-                    'div:has-text("deposit limit options") label[class*="Slider" i]',
-                    'div:has-text("deposit limit options") span[class*="Slider" i]',
                     'div:has-text("deposit limit options") [data-component="Toggle"]',
                     'div:has-text("deposit limit options") [role="switch"]',
                     'div:has-text("I\'ve looked at my deposit limit") input[type="checkbox"]',
                     'div:has-text("I\'ve looked at my deposit limit") label:has(input[type="checkbox"])',
-                    'div:has-text("I\'ve looked at my deposit limit") label[class*="Slider" i]',
-                    'div:has-text("I\'ve looked at my deposit limit") span[class*="Slider" i]',
                     'div:has-text("I\'ve looked at my deposit limit") [data-component="Toggle"]',
                     'div:has-text("I\'ve looked at my deposit limit") [role="switch"]',
                     'div:has-text("I’ve looked at my deposit limit") input[type="checkbox"]',
                     'div:has-text("I’ve looked at my deposit limit") [role="switch"]',
-                    'label[class*="SliderWrapper" i]',
-                    'span[class*="Slider" i]',
-                    'input[type="checkbox"][data-component="WithConfig"]',
-                    'div[data-component="Toggle"]',
-                    'div[class*="ToggleWrapper" i]',
                     '[data-test*="deposit-limit-switch" i]',
                     '[data-test*="limit-toggle" i]',
+                    'input[type="checkbox"][data-component="WithConfig"]',
+                    'div[data-component="Toggle"]',
+                    'label[class*="SliderWrapper" i]',
+                    'span[class*="Slider" i]',
                     '[role="switch"]',
                     'input[type="checkbox"]'
                 ]
-                switch_toggled = False
                 for switch_sel in ack_switch_selectors:
                     try:
-                        switches = page.locator(switch_sel)
-                        cnt = switches.count()
-                        for i in range(cnt):
-                            s = switches.nth(i)
-                            if s.is_visible(timeout=100):
-                                # Skip switches that belong to "reality check"
-                                try:
-                                    res_r = s.evaluate("""el => {
-                                        const parent = el.closest('div, label, section') || el.parentElement;
-                                        const txt = (parent ? (parent.innerText || parent.textContent || '') : '').toLowerCase();
-                                        return txt.includes('reality check');
-                                    }""")
-                                    if res_r is True:
-                                        continue
-                                except Exception:
-                                    pass
+                        s = page.locator(switch_sel).first
+                        if s.is_visible(timeout=100):
+                            # Skip switches that belong to "reality check"
+                            try:
+                                res_r = s.evaluate("""el => {
+                                    const parent = el.closest('div, label, section') || el.parentElement;
+                                    const txt = (parent ? (parent.innerText || parent.textContent || '') : '').toLowerCase();
+                                    return txt.includes('reality check');
+                                }""")
+                                if res_r is True:
+                                    continue
+                            except Exception:
+                                pass
 
-                                tag = s.evaluate("e => e.tagName")
-                                if tag == "INPUT":
-                                    inp_type = (s.get_attribute("type") or "").lower()
-                                    if inp_type not in ("checkbox", "radio"):
-                                        continue
+                            tag = str(s.evaluate("e => e.tagName") or "").upper()
+                            if tag == "INPUT":
+                                inp_type = (s.get_attribute("type") or "").lower()
+                                if inp_type == "checkbox":
                                     if s.is_checked():
-                                        switch_toggled = True
                                         break
-
-                                aria_chk = s.get_attribute("aria-checked")
-                                if aria_chk == "true":
-                                    switch_toggled = True
-                                    break
-
-                                if log and pass_num == 1:
-                                    log.info(f"Toggling Deposit Limit switch ON ({switch_sel} #{i})")
-                                s.scroll_into_view_if_needed()
-                                
-                                try:
-                                    if tag == "INPUT" and (s.get_attribute("type") or "").lower() == "checkbox":
-                                        try:
-                                            s.check(force=True)
-                                        except Exception:
-                                            s.click(force=True)
-                                    else:
-                                        # If container has an input checkbox, also check it
-                                        try:
-                                            child_cb = s.locator('input[type="checkbox"]').first
-                                            if child_cb.is_visible(timeout=50) and not child_cb.is_checked():
-                                                child_cb.check(force=True)
-                                        except Exception:
-                                            pass
+                                    if log and pass_num == 1:
+                                        log.info(f"Checking Deposit Limit checkbox ({switch_sel})")
+                                    try:
+                                        s.check(force=True)
+                                    except Exception:
                                         s.click(force=True)
-                                except Exception:
-                                    pass
-                                
-                                page.wait_for_timeout(200)
-                                if is_switch_active():
-                                    switch_toggled = True
+                                    page.wait_for_timeout(200)
                                     break
-                        if switch_toggled:
+
+                            aria_chk = s.get_attribute("aria-checked")
+                            if aria_chk == "true":
+                                break
+
+                            if log and pass_num == 1:
+                                log.info(f"Toggling Deposit Limit switch ON ({switch_sel})")
+                            s.scroll_into_view_if_needed()
+
+                            try:
+                                s.click(force=True)
+                            except Exception:
+                                pass
+                            page.wait_for_timeout(200)
                             break
                     except Exception:
                         continue

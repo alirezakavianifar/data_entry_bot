@@ -177,7 +177,9 @@ def test_starsports_onboarding_form_toggle_and_next_progression():
         nonlocal switch_clicked
         switch_clicked = True
     mock_switch_nth.click.side_effect = on_switch_click
+    mock_switch_nth.check.side_effect = on_switch_click
     mock_switch.nth.return_value = mock_switch_nth
+    mock_switch.first = mock_switch_nth
 
     mock_next_btn = MagicMock()
     mock_next_btn.is_visible.return_value = True
@@ -294,7 +296,9 @@ def test_planetsportbet_onboarding_form_toggle_and_next_progression():
         nonlocal switch_clicked
         switch_clicked = True
     mock_switch_nth.click.side_effect = on_switch_click
+    mock_switch_nth.check.side_effect = on_switch_click
     mock_switch.nth.return_value = mock_switch_nth
+    mock_switch.first = mock_switch_nth
 
     mock_next_btn = MagicMock()
     mock_next_btn.is_visible.return_value = True
@@ -411,7 +415,9 @@ def test_bresbet_onboarding_form_toggle_and_next_progression():
         nonlocal switch_clicked
         switch_clicked = True
     mock_switch_nth.click.side_effect = on_switch_click
+    mock_switch_nth.check.side_effect = on_switch_click
     mock_switch.nth.return_value = mock_switch_nth
+    mock_switch.first = mock_switch_nth
 
     mock_next_btn = MagicMock()
     mock_next_btn.is_visible.return_value = True
@@ -528,7 +534,9 @@ def test_betstgeorge_onboarding_form_toggle_and_next_progression():
         nonlocal switch_clicked
         switch_clicked = True
     mock_switch_nth.click.side_effect = on_switch_click
+    mock_switch_nth.check.side_effect = on_switch_click
     mock_switch.nth.return_value = mock_switch_nth
+    mock_switch.first = mock_switch_nth
 
     mock_next_btn = MagicMock()
     mock_next_btn.is_visible.return_value = True
