@@ -367,7 +367,7 @@ def select_matching_playbook_address(page: Page, client: Client, log=None) -> bo
                         log.info(f"No confident address match in dropdown for '{client.address_line1}' (best score: {best_score}). Will use manual entry.")
 
         # Address Verification & Fallback: Guarantee address_line1 and town_city match client details
-        addr1 = page.locator('input[data-test="first-line-address-input"], input[name="address-1"], input[placeholder*="Address"]').first
+        addr1 = page.locator('input[data-test="address-line-1-input"], input[data-test="first-line-address-input"], input[name="address-1"], input[placeholder*="Address"]').first
         city_inp = page.locator('input[data-test="town-city-input"], input[name="town-city"], input[placeholder*="Town"], input[placeholder*="City"]').first
 
         # Check if address line 1 is visible and accurately filled
