@@ -269,11 +269,15 @@ class StarSportsAdapter(BaseSiteAdapter):
                         continue
 
                 # Check if signup form / onboarding modal is still active in the DOM
-                is_onboarding_open = page.locator(
-                    'aside[data-test="SignUpStepsContainer"]:visible, '
-                    '[data-test="SignUpStepsContainer"]:visible, '
-                    'button[data-test="agree-and-join-button"]:visible'
-                ).first.is_visible(timeout=200)
+                is_onboarding_open = False
+                for onb_sel in ['aside[data-test="SignUpStepsContainer"]', '[data-test="SignUpStepsContainer"]']:
+                    try:
+                        loc = page.locator(onb_sel).first
+                        if loc.is_visible(timeout=100):
+                            is_onboarding_open = True
+                            break
+                    except Exception:
+                        continue
 
                 # Only confirm when authenticated session exists AND onboarding modal is dismissed
                 if (has_auth or sec > 5) and not is_onboarding_open:
