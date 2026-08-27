@@ -844,10 +844,6 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
                         target.setAttribute('aria-checked', 'true');
                         target.classList.add('checked', 'active', 'on');
 
-                        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evtName => {
-                            try { target.dispatchEvent(new Event(evtName, { bubbles: true, cancelable: true })); } catch (err) {}
-                        });
-
                         for (const key in target) {
                             if (key.startsWith('__reactProps') || key.startsWith('__reactEvents') || key.startsWith('__reactFiber')) {
                                 const props = target[key];
@@ -855,15 +851,12 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
                                     if (typeof props.onChange === 'function') {
                                         try { props.onChange({ target: { checked: true, value: true } }); } catch (e) {}
                                     }
-                                    if (typeof props.onClick === 'function') {
-                                        try { props.onClick({ target: target, currentTarget: target }); } catch (e) {}
-                                    }
                                 }
                             }
                         }
                     }
                 }""")
-                page.wait_for_timeout(300)
+                page.wait_for_timeout(400)
             except Exception:
                 pass
 
