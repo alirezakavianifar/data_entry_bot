@@ -222,7 +222,7 @@ class AutomationEngine:
                             stats["success_count"] += 1
                         elif result.status == RegistrationStatus.ALREADY_REGISTERED:
                             self.provider.record_success(result)
-                            logger.info(f"ℹ️ {client.full_name} recorded as ALREADY_REGISTERED on {site.site_name}")
+                            logger.info(f"[ALREADY_REGISTERED] {client.full_name} recorded on {site.site_name}")
                             stats["already_registered_count"] += 1
                         else:
                             self.provider.record_failure(result)

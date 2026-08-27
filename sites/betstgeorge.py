@@ -76,7 +76,14 @@ class BetStGeorgeAdapter(BaseSiteAdapter):
                 human_pause(page, 2.0, 3.5)
 
             # Check for Step 1 validation errors
-            step1_err = page.locator('div[class*="error"]:visible, span[class*="error"]:visible, p[class*="error"]:visible, [data-test*="error"]:visible, [class*="errorMessage"]:visible, :has-text("already exists"):visible').first
+            step1_err = page.locator(
+                'aside[data-test="SignUpStepsContainer"] div[class*="error"]:visible, '
+                'aside[data-test="SignUpStepsContainer"] span[class*="error"]:visible, '
+                'aside[data-test="SignUpStepsContainer"] p[class*="error"]:visible, '
+                'aside[data-test="SignUpStepsContainer"] [data-test*="error"]:visible, '
+                'aside[data-test="SignUpStepsContainer"] [class*="errorMessage"]:visible, '
+                '[data-test="SignUpStepsContainer"] [class*="error"]:visible'
+            ).first
             if step1_err.is_visible(timeout=1500):
                 err_txt = step1_err.inner_text().strip()
                 if is_already_registered_error(err_txt) or any(kw in err_txt.lower() for kw in ["already exists", "in use", "already registered", "taken"]):
