@@ -265,7 +265,7 @@ class AutomationEngine:
                         # Randomized human cooldown (15-20s) between registrations
                         if ENABLE_HUMAN_PACING and not self.is_stop_requested():
                             cooldown_sec = random.uniform(INTER_ACCOUNT_DELAY_MIN, INTER_ACCOUNT_DELAY_MAX)
-                            logger.info(f"⏳ Waiting {round(cooldown_sec, 1)}s randomized human cooldown before next action...")
+                            logger.info(f"Waiting {round(cooldown_sec, 1)}s randomized human cooldown before next action...")
                             self.stop_event.wait(timeout=cooldown_sec)
 
                 stats["processed_clients"] += 1

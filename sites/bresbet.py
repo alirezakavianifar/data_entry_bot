@@ -48,12 +48,18 @@ class BresbetAdapter(BaseSiteAdapter):
 
             # Check if sign up modal or landing form is open
             email_inp = page.locator('input[data-test="landing-page-email-input"], input[data-test="email-input"], input[placeholder*="Email"]').first
-            if not email_inp.is_visible(timeout=3000):
+            if not email_inp.is_visible(timeout=2000):
                 reg_btn = page.locator('a[data-test="account-navigation-signup-link"], a:has-text("Sign Up"), button:has-text("Sign Up")').first
-                if reg_btn.is_visible(timeout=3000):
+                if reg_btn.is_visible(timeout=2000):
                     log.info("Clicking Sign Up CTA on BresBet")
                     reg_btn.click(force=True)
-                    page.wait_for_timeout(2000)
+                    page.wait_for_timeout(1500)
+
+            # If drawer opened with initial 'Create Account' CTA, click it to show credential inputs
+            initial_create_btn = page.locator('aside[data-test="SignUpStepsContainer"] button:has-text("Create Account"), [data-test="SignUpStepsContainer"] button:has-text("Create Account"), button[data-test="create-account-button"]').first
+            if initial_create_btn.is_visible(timeout=1500):
+                initial_create_btn.click(force=True)
+                page.wait_for_timeout(1000)
 
             # 2. Step 1: Credentials
             email_inp = page.locator('input[data-test="landing-page-email-input"], input[data-test="email-input"], input[placeholder*="Email"]').first
