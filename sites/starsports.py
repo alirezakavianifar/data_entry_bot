@@ -3,6 +3,7 @@ from sites.base import (
     BaseSiteAdapter,
     extract_clean_error_message,
     is_already_registered_error,
+    is_pending_verification_error,
     human_type,
     human_pause,
     handle_playbook_safer_gambling_no_limit,
@@ -45,20 +46,32 @@ class StarSportsAdapter(BaseSiteAdapter):
                 cookie_btn.click(force=True)
                 page.wait_for_timeout(1000)
 
-            # Check if sign up modal is open
-            email_inp = page.locator('input[data-test="email-input"]').first
-            if not email_inp.is_visible(timeout=3000):
+            # 2. Step 1: Credentials & Sign Up drawer detection
+            email_sel = 'input[data-test="landing-page-email-input"], input[data-test="email-input"], input[placeholder*="Email"], input[type="email"]'
+            signup_drawer = page.locator('aside[data-test="SignUpStepsContainer"]').first
+            if not signup_drawer.is_visible(timeout=2000):
                 reg_btn = page.locator('a[data-test="account-navigation-signup-link"], a:has-text("Sign Up"), button:has-text("Sign Up")').first
-                if reg_btn.is_visible(timeout=3000):
+                if reg_btn.is_visible(timeout=2000):
                     log.info("Clicking Sign Up CTA on Star Sports")
                     reg_btn.click(force=True)
                     page.wait_for_timeout(2000)
 
-            # 2. Step 1: Credentials
-            email_inp = page.locator('input[data-test="email-input"]').first
-            pwd_inp = page.locator('input[data-test="create-password-input"]').first
+            # If promo drawer has "Create Account" or "Get Started" CTA before inputs
+            create_acc_btn = page.locator('aside[data-test="SignUpStepsContainer"] button:has-text("Create Account"), button:has-text("Create Account"), button[data-test*="create-account"]').first
+            if create_acc_btn.is_visible(timeout=2000):
+                log.info("Clicking Create Account CTA in promo drawer")
+                create_acc_btn.click(force=True)
+                page.wait_for_timeout(1500)
 
-            if not email_inp.is_visible(timeout=4000) or not pwd_inp.is_visible(timeout=4000):
+            try:
+                page.wait_for_selector(email_sel, timeout=15000, state="visible")
+            except Exception:
+                pass
+
+            email_inp = page.locator(email_sel).first
+            pwd_inp = page.locator('input[data-test="landing-page-password-input"], input[data-test="create-password-input"], input[placeholder*="password"]').first
+
+            if not email_inp.is_visible(timeout=3000) or not pwd_inp.is_visible(timeout=3000):
                 bundle = capture_failure_bundle(page, client.client_id, self.site_id, "step1_inputs_missing")
                 return RegistrationResult(
                     client_id=client.client_id,
@@ -77,6 +90,13 @@ class StarSportsAdapter(BaseSiteAdapter):
             human_pause(page, 0.4, 0.8)
             human_type(pwd_inp, password, page)
             human_pause(page, 0.6, 1.2)
+
+            # Dismiss Cookiebot if overlaying
+            cookie_btn = page.locator('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll, #CybotCookiebotDialogBodyButtonAccept, button:has-text("Allow all"), button:has-text("Accept")').first
+            if cookie_btn.is_visible(timeout=2000):
+                log.info("Accepting Cookiebot consent on Star Sports")
+                cookie_btn.click(force=True)
+                page.wait_for_timeout(1000)
 
             create_acc_btn = page.locator('button[data-test="create-account-button"]').first
             if create_acc_btn.is_visible(timeout=2000):
@@ -118,6 +138,11 @@ class StarSportsAdapter(BaseSiteAdapter):
                     )
 
             # 3. Step 2: Personal Details
+            try:
+                page.wait_for_selector('input[data-test="first-name-input"]', timeout=15000, state="visible")
+            except Exception:
+                pass
+
             fn_inp = page.locator('input[data-test="first-name-input"]').first
             ln_inp = page.locator('input[data-test="last-name-input"]').first
             day_inp = page.locator('input[data-test="day-input"]').first
@@ -126,7 +151,7 @@ class StarSportsAdapter(BaseSiteAdapter):
             num_inp = page.locator('input[data-test="number-input"]').first
             postcode_inp = page.locator('input[data-test="postcode-input"]').first
 
-            if not fn_inp.is_visible(timeout=5000):
+            if not fn_inp.is_visible(timeout=3000):
                 dup_err = page.locator('div[class*="error"]:visible, span[class*="error"]:visible, p[class*="error"]:visible, [data-test*="error"]:visible, :has-text("already exists"):visible, :has-text("in use"):visible').first
                 if dup_err.is_visible(timeout=1000):
                     raw_txt = dup_err.inner_text().strip().replace("\n", " - ")
@@ -248,8 +273,74 @@ class StarSportsAdapter(BaseSiteAdapter):
             has_auth = False
 
             for sec in range(1, max_poll_sec + 1):
-                # Always attempt to detect and handle Playbook Safer Gambling / Deposit Limit onboarding
+                # 1. Always attempt to detect and handle Playbook Safer Gambling / Deposit Limit onboarding
                 handle_playbook_safer_gambling_no_limit(page, log if sec % 5 == 1 else None)
+
+                # Check if Safer Gambling onboarding form is still active in the DOM
+                is_onboarding_open = any(
+                    page.locator(sel).first.is_visible(timeout=100)
+                    for sel in [
+                        'aside[data-test="SignUpStepsContainer"]:has-text("SAFER GAMBLING")',
+                        'aside[data-test="SignUpStepsContainer"]:has-text("Net deposit limits")',
+                        'aside[data-test="SignUpStepsContainer"]:has-text("deposit limit")',
+                        'aside[data-test="SignUpStepsContainer"]:has-text("Turn on reality check")',
+                        'div[role="dialog"]:has-text("SAFER GAMBLING")',
+                        'div[class*="modal"]:has-text("SAFER GAMBLING")'
+                    ]
+                )
+
+                # 2. Check for KYC / Duplicate only if onboarding modal has closed or explicit error banner is present
+                try:
+                    res = page.locator("body").inner_text()
+                    body_text = str(res) if isinstance(res, str) else ""
+                except Exception:
+                    body_text = ""
+
+                has_explicit_error = any(
+                    page.locator(e_sel).first.is_visible(timeout=100)
+                    for e_sel in [
+                        'div[data-test="error-message"]',
+                        '[class*="ErrorMessage"]',
+                        ':has-text("Account Suspended")',
+                        ':has-text("temporarily suspended")',
+                        ':has-text("verification issue")',
+                        'p:has-text("suspended pending verification")',
+                        'button:has-text("Verify")',
+                        'div[class*="suspended"]'
+                    ]
+                )
+
+                if (not is_onboarding_open or has_explicit_error) and is_pending_verification_error(body_text):
+                    log.info(f"Star Sports registration successful with KYC / Account Verification Pending.")
+                    success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.SUCCESS,
+                        email=client.email,
+                        username=client.email,
+                        password=password,
+                        account_reference="StarSports-Direct (⚠️ KYC/Verification Pending)",
+                        screenshot_path=success_shot,
+                        login_verified=False
+                    )
+
+                if (not is_onboarding_open or has_explicit_error) and is_already_registered_error(body_text):
+                    log.warning(f"[DUPLICATE] Star Sports: Client {client.full_name} is ALREADY REGISTERED ({body_text[:100]})")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.ALREADY_REGISTERED,
+                        email=client.email,
+                        password=password,
+                        error_summary=f"Already registered: {body_text[:100]}",
+                        screenshot_path=bundle.screenshot_path
+                    )
 
                 # Check for genuine authenticated dashboard / session indicators (exclude modal triggers)
                 auth_indicators = [
@@ -267,28 +358,6 @@ class StarSportsAdapter(BaseSiteAdapter):
                             break
                     except Exception:
                         continue
-
-                # Check if signup form / onboarding modal is still active in the DOM
-                is_onboarding_open = page.locator(
-                    'aside[data-test="SignUpStepsContainer"]:visible, '
-                    '[data-test="SignUpStepsContainer"]:visible, '
-                    'button[data-test="agree-and-join-button"]:visible, '
-                    'legend:has-text("SAFER GAMBLING"):visible, '
-                    'h1:has-text("SAFER GAMBLING"):visible, '
-                    'h2:has-text("SAFER GAMBLING"):visible, '
-                    'h3:has-text("SAFER GAMBLING"):visible, '
-                    '[data-test*="safer-gambling"]:visible, '
-                    '[data-component*="SaferGambling"]:visible, '
-                    'div[class*="deposit-modal"]:visible, '
-                    'div[class*="deposit-limit" i]:visible, '
-                    'div:has-text("Net deposit limits"):visible, '
-                    'div:has-text("Rolling Net Deposit Limits"):visible, '
-                    'div:has-text("How do Rolling Net Deposit Limits help me?"):visible, '
-                    'div:has-text("deposit limit options"):visible, '
-                    'div:has-text("happy with my current choice"):visible, '
-                    'div:has-text("I\'ve looked at my deposit limit"):visible, '
-                    'div:has-text("I’ve looked at my deposit limit"):visible'
-                ).first.is_visible(timeout=200)
 
                 # Only confirm when authenticated session exists AND onboarding modal is dismissed
                 if (has_auth or sec > 5) and not is_onboarding_open:

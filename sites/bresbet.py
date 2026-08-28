@@ -4,6 +4,7 @@ from sites.base import (
     BaseSiteAdapter,
     extract_clean_error_message,
     is_already_registered_error,
+    is_pending_verification_error,
     human_type,
     human_pause,
     handle_playbook_safer_gambling_no_limit,
@@ -56,6 +57,13 @@ class BresbetAdapter(BaseSiteAdapter):
                     reg_btn.click(force=True)
                     page.wait_for_timeout(2000)
 
+            # If promo drawer has "Create Account" or "Get Started" CTA before inputs
+            create_acc_btn = page.locator('aside[data-test="SignUpStepsContainer"] button:has-text("Create Account"), button:has-text("Create Account"), button[data-test*="create-account"]').first
+            if create_acc_btn.is_visible(timeout=2000):
+                log.info("Clicking Create Account CTA in promo drawer")
+                create_acc_btn.click(force=True)
+                page.wait_for_timeout(1500)
+
             try:
                 page.wait_for_selector(email_sel, timeout=15000, state="visible")
             except Exception:
@@ -83,6 +91,13 @@ class BresbetAdapter(BaseSiteAdapter):
             human_pause(page, 0.4, 0.8)
             human_type(pwd_inp, password, page)
             human_pause(page, 0.6, 1.2)
+
+            # Dismiss Cookiebot if overlaying
+            cookie_btn = page.locator('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll, #CybotCookiebotDialogBodyButtonAccept, button:has-text("Allow all"), button:has-text("Accept")').first
+            if cookie_btn.is_visible(timeout=2000):
+                log.info("Accepting Cookiebot consent on BresBet")
+                cookie_btn.click(force=True)
+                page.wait_for_timeout(1000)
 
             create_acc_btn = page.locator('button:has-text("Create Account"), button:has-text("Join Here"), button[data-test="create-account-button"], button[type="submit"]:has-text("Join"), button[type="submit"]:has-text("Sign Up"), button[type="submit"]').first
             if create_acc_btn.is_visible(timeout=2000):
@@ -261,8 +276,74 @@ class BresbetAdapter(BaseSiteAdapter):
             has_auth = False
 
             for sec in range(1, max_poll_sec + 1):
-                # Always attempt to detect and handle Playbook Safer Gambling / Deposit Limit onboarding
+                # 1. Always attempt to detect and handle Playbook Safer Gambling / Deposit Limit onboarding
                 handle_playbook_safer_gambling_no_limit(page, log if sec % 5 == 1 else None)
+
+                # Check if Safer Gambling onboarding form is still active in the DOM
+                is_onboarding_open = any(
+                    page.locator(sel).first.is_visible(timeout=100)
+                    for sel in [
+                        'aside[data-test="SignUpStepsContainer"]:has-text("SAFER GAMBLING")',
+                        'aside[data-test="SignUpStepsContainer"]:has-text("Net deposit limits")',
+                        'aside[data-test="SignUpStepsContainer"]:has-text("deposit limit")',
+                        'aside[data-test="SignUpStepsContainer"]:has-text("Turn on reality check")',
+                        'div[role="dialog"]:has-text("SAFER GAMBLING")',
+                        'div[class*="modal"]:has-text("SAFER GAMBLING")'
+                    ]
+                )
+
+                # 2. Check for KYC / Duplicate only if onboarding modal has closed or explicit error banner is present
+                try:
+                    res = page.locator("body").inner_text()
+                    body_text = str(res) if isinstance(res, str) else ""
+                except Exception:
+                    body_text = ""
+
+                has_explicit_error = any(
+                    page.locator(e_sel).first.is_visible(timeout=100)
+                    for e_sel in [
+                        'div[data-test="error-message"]',
+                        '[class*="ErrorMessage"]',
+                        ':has-text("Account Suspended")',
+                        ':has-text("temporarily suspended")',
+                        ':has-text("verification issue")',
+                        'p:has-text("suspended pending verification")',
+                        'button:has-text("Verify")',
+                        'div[class*="suspended"]'
+                    ]
+                )
+
+                if (not is_onboarding_open or has_explicit_error) and is_pending_verification_error(body_text):
+                    log.info(f"BresBet registration successful with KYC / Account Verification Pending.")
+                    success_shot = capture_success_screenshot(page, client.client_id, self.site_id)
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.SUCCESS,
+                        email=client.email,
+                        username=client.email,
+                        password=password,
+                        account_reference="BresBet-Direct (⚠️ KYC/Verification Pending)",
+                        screenshot_path=success_shot,
+                        login_verified=False
+                    )
+
+                if (not is_onboarding_open or has_explicit_error) and is_already_registered_error(body_text):
+                    log.warning(f"[DUPLICATE] BresBet: Client {client.full_name} is ALREADY REGISTERED ({body_text[:100]})")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.ALREADY_REGISTERED,
+                        email=client.email,
+                        password=password,
+                        error_summary=f"Already registered: {body_text[:100]}",
+                        screenshot_path=bundle.screenshot_path
+                    )
 
                 # Check for genuine authenticated dashboard / session indicators (exclude modal triggers)
                 auth_indicators = [
@@ -280,14 +361,6 @@ class BresbetAdapter(BaseSiteAdapter):
                             break
                     except Exception:
                         continue
-
-                # Check if signup form / onboarding modal is still active in the DOM
-                is_onboarding_open = page.locator(
-                    'aside[data-test="SignUpStepsContainer"]:visible, '
-                    '[data-test="SignUpStepsContainer"]:visible, '
-                    'div[role="dialog"]:has-text("SAFER GAMBLING"):visible, '
-                    'div[class*="modal"]:has-text("SAFER GAMBLING"):visible'
-                ).first.is_visible(timeout=200)
 
                 # Only confirm when authenticated session exists AND onboarding modal is dismissed
                 if (has_auth or sec > 5) and not is_onboarding_open:

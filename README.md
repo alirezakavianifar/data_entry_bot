@@ -247,6 +247,30 @@ To use a live Google Sheet instead of local Excel:
 
 ---
 
+## 👁️ Visual Non-Headless Verification & Testing
+
+To visually observe registration, address matching, and deposit limit handling live on your screen in a visible Google Chrome window:
+
+### Quick Launcher (`.bat`):
+Double-click **`run_visual_verification.bat`** in the project root and choose:
+- `1` for **BresBet**
+- `2` for **Star Sports**
+- `3` for **Planet Sport Bet**
+- `4` for **Bet St George**
+- `5` for **All Playbook Sites** (sequential)
+
+### Command Line:
+```powershell
+python scripts\verify_nonheadless.py bresbet
+python scripts\verify_nonheadless.py planetsportbet
+python scripts\verify_nonheadless.py starsports
+python scripts\verify_nonheadless.py betstgeorge
+python scripts\verify_nonheadless.py all
+```
+The browser window will open on your desktop, type fields with human pacing, handle modals, and leave the result screen open for 8 seconds for inspection.
+
+---
+
 ## Diagnostic Logs & Troubleshooting
 
 - **General Logs:** Check `logs/bot.log` for step-by-step breadcrumbs and timings.

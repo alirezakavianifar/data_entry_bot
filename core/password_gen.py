@@ -1,7 +1,7 @@
 import secrets
 import string
 
-ALLOWED_SPECIAL = "!@#$%^&*"
+ALLOWED_SPECIAL = "@#$*-_"
 
 
 def generate_password(length: int = 14) -> str:

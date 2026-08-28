@@ -103,24 +103,27 @@ PENDING_VERIFICATION_PATTERNS = [
     r"electoral roll",
     r"document upload",
     r"upload (?:your )?documents",
-    r"kyc",
     r"verify your details",
     r"account pending verification",
     r"require email verification",
     r"email verification",
-    r"account (?:is |has been )?suspended",
-    r"suspended",
-    r"account (?:is |has been )?locked",
-    r"account (?:is |has been )?restricted",
+    r"account (?:is |has been |was |has been temporarily |is temporarily )?suspended",
+    r"temporarily suspended",
+    r"verification issue",
+    r"re-initiate the verification process",
+    r"suspended pending verification",
+    r"automatically suspended",
+    r"account (?:is |has been |was )?locked",
+    r"account (?:is |has been |was )?restricted",
     r"your account is restricted",
-    r"restricted",
+    r"details (?:you entered )?could not be verified",
     r"do not attempt to open another",
     r"unable to open another"
 ]
 
 def is_pending_verification_error(text: str) -> bool:
     """Returns True if the message indicates the account exists but requires user email or KYC verification."""
-    if not text:
+    if not text or not isinstance(text, str):
         return False
     for pat in PENDING_VERIFICATION_PATTERNS:
         if re.search(pat, text, re.IGNORECASE):
@@ -269,7 +272,7 @@ def select_matching_playbook_address(page: Page, client: Client, log=None) -> bo
             cnt = addr_list.count()
             
             if cnt > 0:
-                target_raw = client.address_line1.strip().lower()
+                target_raw = str(client.address_line1 or "").strip().lower() if isinstance(client.address_line1, str) else ""
                 target_clean = re.sub(r'[^a-z0-9\s]', ' ', target_raw)
                 target_tokens = [t for t in target_clean.split() if t]
                 
@@ -284,7 +287,8 @@ def select_matching_playbook_address(page: Page, client: Client, log=None) -> bo
                 for idx in range(cnt):
                     try:
                         item = addr_list.nth(idx)
-                        item_text = (item.inner_text() or "").strip()
+                        raw_txt = item.inner_text()
+                        item_text = str(raw_txt).strip() if isinstance(raw_txt, str) else ""
                         item_lower = item_text.lower()
                         item_clean = re.sub(r'[^a-z0-9\s]', ' ', item_lower)
                         item_numbers = re.findall(r'\b\d+[a-z]?\b', item_clean)
@@ -535,46 +539,25 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
             except Exception:
                 pass
 
-            # Step 1: Deposit Limit Inputs & Presets
-            # If multi-period inputs exist (Daily, Weekly, Monthly), set hierarchical amounts (100, 500, 1000)
-            # only if completely blank so cross-field validation (Daily < Weekly < Monthly) is always satisfied.
+            # Step 1: Deposit Limit Inputs & Presets (Strictly Hierarchical: 1 Day < 7 Days < 30 Days)
             try:
-                daily_inputs = page.locator('input[name*="daily" i], input[id*="daily" i], input[data-test*="daily" i]')
-                for i in range(daily_inputs.count()):
+                # Find all period / amount inputs within the container
+                amount_inputs = page.locator(
+                    'aside[data-test="SignUpStepsContainer"] input[data-test*="deposit" i], '
+                    'aside[data-test="SignUpStepsContainer"] input[data-test*="amount" i], '
+                    'aside[data-test="SignUpStepsContainer"] input[name*="limit" i], '
+                    'aside[data-test="SignUpStepsContainer"] input[placeholder*="limit" i]'
+                )
+                hierarchical_amounts = ["100", "500", "2000"]
+                for i in range(amount_inputs.count()):
                     try:
-                        inp = daily_inputs.nth(i)
-                        if inp.is_visible(timeout=100) and not (inp.input_value() or "").strip():
-                            inp.fill("100")
-                    except Exception:
-                        pass
-
-                weekly_inputs = page.locator('input[name*="weekly" i], input[id*="weekly" i], input[data-test*="weekly" i]')
-                for i in range(weekly_inputs.count()):
-                    try:
-                        inp = weekly_inputs.nth(i)
-                        if inp.is_visible(timeout=100) and not (inp.input_value() or "").strip():
-                            inp.fill("500")
-                    except Exception:
-                        pass
-
-                monthly_inputs = page.locator('input[name*="monthly" i], input[id*="monthly" i], input[data-test*="monthly" i]')
-                for i in range(monthly_inputs.count()):
-                    try:
-                        inp = monthly_inputs.nth(i)
-                        if inp.is_visible(timeout=100) and not (inp.input_value() or "").strip():
-                            inp.fill("1000")
-                    except Exception:
-                        pass
-
-                # For single deposit limit amount fields (e.g. Star Sports single limit box)
-                generic_inputs = page.locator('input[data-test*="deposit-limit" i]:not([name*="daily" i]):not([name*="weekly" i]):not([name*="monthly" i]), input[data-test*="amount" i]:not([name*="daily" i]):not([name*="weekly" i]):not([name*="monthly" i])')
-                for i in range(generic_inputs.count()):
-                    try:
-                        inp = generic_inputs.nth(i)
-                        if inp.is_visible(timeout=100) and not (inp.input_value() or "").strip():
+                        inp = amount_inputs.nth(i)
+                        val = (inp.input_value() or "").strip()
+                        if inp.is_visible(timeout=100) and not val:
+                            fill_val = hierarchical_amounts[min(i, len(hierarchical_amounts) - 1)]
                             if log and pass_num == 1:
-                                log.info("Filling deposit limit input with £200")
-                            inp.fill("200")
+                                log.info(f"Filling deposit limit input {i+1} with £{fill_val}")
+                            inp.fill(fill_val)
                     except Exception:
                         pass
             except Exception:
@@ -599,24 +582,35 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
                 except Exception:
                     continue
 
-            # Step 2: Helper to check if DEPOSIT LIMIT switch is ALREADY active
+            # Step 2: Helper to check if DEPOSIT LIMIT acknowledgment switch is ALREADY active
             def is_switch_active() -> bool:
                 try:
                     res = page.evaluate("""() => {
-                        const sgContainer = document.querySelector('aside[data-test="SignUpStepsContainer"]');
+                        const sgContainer = document.querySelector('aside[data-test="SignUpStepsContainer"], [data-test="SignUpStepsContainer"]');
                         if (!sgContainer) return true; // Modal is closed
 
-                        const nextBtn = sgContainer.querySelector('button[data-test="next-button"], button[data-test*="next" i]');
-                        if (nextBtn) {
-                            const style = window.getComputedStyle(nextBtn);
-                            if (style.opacity === '1' || style.cursor === 'pointer') {
-                                return true;
-                            }
-                        }
+                        const allEls = Array.from(sgContainer.querySelectorAll('div, label, p, span'));
+                        const ackEl = allEls.find(el => {
+                            const t = (el.innerText || el.textContent || '').toLowerCase();
+                            return t.includes('happy with my current choice') || 
+                                   t.includes('looked at my deposit limit') || 
+                                   t.includes('even if i\'ve decided') || 
+                                   t.includes('even if i’ve decided');
+                        });
 
-                        const cb = sgContainer.querySelector('input[type="checkbox"][data-component="WithConfig"], div[data-component="Toggle"] input[type="checkbox"], label[class*="SliderWrapper"] input[type="checkbox"]');
-                        if (cb && cb.checked) {
-                            return true;
+                        if (ackEl) {
+                            let parent = ackEl;
+                            for (let i = 0; i < 5 && parent; i++) {
+                                const cb = parent.querySelector('input[type="checkbox"]');
+                                if (cb) {
+                                    return cb.checked;
+                                }
+                                const slider = parent.querySelector('[role="switch"], div[data-component="Toggle"], span[class*="Slider"]');
+                                if (slider && (slider.getAttribute('aria-checked') === 'true' || slider.classList.contains('active') || slider.classList.contains('checked'))) {
+                                    return true;
+                                }
+                                parent = parent.parentElement;
+                            }
                         }
                         return false;
                     }""")
@@ -674,12 +668,63 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
                 except Exception:
                     continue
 
-            # Step 4: Physical Switch / Toggle Interaction (Strictly Idempotent!)
+            # Step 4: Handle Reality Check (Ensure it doesn't block Next progression)
+            try:
+                # If reality check toggle is inadvertently ON, turn it OFF or pick a frequency
+                page.evaluate("""() => {
+                    const allEls = Array.from(document.querySelectorAll('div, label, span, p'));
+                    const rcEl = allEls.find(el => {
+                        const t = (el.innerText || el.textContent || '').toLowerCase();
+                        return t.includes('turn on reality check') || t.includes('reality check');
+                    });
+                    if (rcEl) {
+                        let parent = rcEl;
+                        for (let i = 0; i < 4 && parent; i++) {
+                            const cb = parent.querySelector('input[type="checkbox"]');
+                            if (cb && cb.checked) {
+                                // Turn off reality check so time frequency dropdown is not required
+                                cb.checked = false;
+                                cb.dispatchEvent(new Event('input', { bubbles: true }));
+                                cb.dispatchEvent(new Event('change', { bubbles: true }));
+                                const slider = parent.querySelector('span[class*="Slider"], label[class*="SliderWrapper"], div[data-component="Toggle"]');
+                                if (slider) slider.click();
+                            }
+                            parent = parent.parentElement;
+                        }
+                    }
+                }""")
+                
+                # If frequency dropdown is still present and open, select an option
+                freq_dropdown = page.locator('div:has-text("Choose a frequency"), [data-component*="Select"]:has-text("frequency"), select[data-test*="reality-check" i]').first
+                if freq_dropdown.is_visible(timeout=200):
+                    try:
+                        freq_dropdown.click(force=True)
+                        page.wait_for_timeout(200)
+                        first_opt = page.locator('div[role="option"], li, div[class*="Option"], span:has-text("60 Minutes"), span:has-text("30 Minutes")').first
+                        if first_opt.is_visible(timeout=300):
+                            first_opt.click(force=True)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            # Step 4b: Physical Switch / Toggle Interaction for Deposit Limit Acknowledgment
             if not is_switch_active():
-                slider = page.locator('aside[data-test="SignUpStepsContainer"] span[data-component="WithConfig"][class*="Slider"], aside[data-test="SignUpStepsContainer"] span[class*="Slider"], aside[data-test="SignUpStepsContainer"] label[class*="SliderWrapper"]').first
+                deposit_sliders = page.locator(
+                    'aside[data-test="SignUpStepsContainer"] div:has-text("happy with my current choice") span[class*="Slider"], '
+                    'aside[data-test="SignUpStepsContainer"] div:has-text("happy with my current choice") label[class*="SliderWrapper"], '
+                    'aside[data-test="SignUpStepsContainer"] div:has-text("happy with my current choice") div[data-component="Toggle"], '
+                    'aside[data-test="SignUpStepsContainer"] div:has-text("deposit limit options") span[class*="Slider"], '
+                    'aside[data-test="SignUpStepsContainer"] div:has-text("deposit limit options") label[class*="SliderWrapper"], '
+                    'aside[data-test="SignUpStepsContainer"] div:has-text("deposit limit options") div[data-component="Toggle"], '
+                    'aside[data-test="SignUpStepsContainer"] div:has-text("I\'ve looked at my deposit limit") span[class*="Slider"], '
+                    'aside[data-test="SignUpStepsContainer"] div:has-text("I\'ve looked at my deposit limit") label[class*="SliderWrapper"], '
+                    'aside[data-test="SignUpStepsContainer"] div:has-text("I’ve looked at my deposit limit") span[class*="Slider"]'
+                )
+                slider = deposit_sliders.last
                 if slider.is_visible(timeout=300):
                     if log:
-                        log.info("Toggling Deposit Limit switch ON via slider click")
+                        log.info("Toggling Deposit Limit switch ON via specific slider click")
                     slider.scroll_into_view_if_needed()
                     slider.click(force=True)
                     page.wait_for_timeout(300)

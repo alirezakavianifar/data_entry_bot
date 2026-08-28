@@ -183,6 +183,8 @@ def test_starsports_onboarding_form_toggle_and_next_progression():
     mock_switch_nth.check.side_effect = on_switch_click
     mock_switch.nth.return_value = mock_switch_nth
     mock_switch.first = mock_switch_nth
+    mock_switch.last = mock_switch_nth
+    mock_switch.click.side_effect = on_switch_click
     mock_switch.locator.return_value = mock_switch
     mock_switch_nth.locator.return_value = mock_switch
 
@@ -307,6 +309,8 @@ def test_planetsportbet_onboarding_form_toggle_and_next_progression():
     mock_switch_nth.check.side_effect = on_switch_click
     mock_switch.nth.return_value = mock_switch_nth
     mock_switch.first = mock_switch_nth
+    mock_switch.last = mock_switch_nth
+    mock_switch.click.side_effect = on_switch_click
     mock_switch.locator.return_value = mock_switch
     mock_switch_nth.locator.return_value = mock_switch
 
@@ -431,6 +435,8 @@ def test_bresbet_onboarding_form_toggle_and_next_progression():
     mock_switch_nth.check.side_effect = on_switch_click
     mock_switch.nth.return_value = mock_switch_nth
     mock_switch.first = mock_switch_nth
+    mock_switch.last = mock_switch_nth
+    mock_switch.click.side_effect = on_switch_click
     mock_switch.locator.return_value = mock_switch
     mock_switch_nth.locator.return_value = mock_switch
 
@@ -555,6 +561,8 @@ def test_betstgeorge_onboarding_form_toggle_and_next_progression():
     mock_switch_nth.check.side_effect = on_switch_click
     mock_switch.nth.return_value = mock_switch_nth
     mock_switch.first = mock_switch_nth
+    mock_switch.last = mock_switch_nth
+    mock_switch.click.side_effect = on_switch_click
     mock_switch.locator.return_value = mock_switch
     mock_switch_nth.locator.return_value = mock_switch
 
@@ -882,15 +890,18 @@ def test_handle_playbook_rolling_net_deposit_limit_with_scroll_and_input():
 
     def locator_side_effect(selector):
         loc = MagicMock()
-        if "Rolling Net Deposit Limits" in selector or "How do Rolling Net Deposit Limits" in selector or "SignUpStepsContainer" in selector:
-            loc.first = mock_modal
-            return loc
-        elif "amount" in selector or "limit" in selector and "input" in selector:
+        if "input" in selector and ("amount" in selector or "limit" in selector or "deposit" in selector or "daily" in selector):
             loc.count.return_value = 1
             loc.nth.return_value = mock_input
             return loc
-        elif "switch" in selector or "Switch" in selector:
-            return mock_switch
+        elif "Rolling Net Deposit Limits" in selector or "How do Rolling Net Deposit Limits" in selector or "SignUpStepsContainer" in selector:
+            loc.first = mock_modal
+            return loc
+        elif "switch" in selector or "Switch" in selector or "Slider" in selector or "Toggle" in selector:
+            loc.count.return_value = 1
+            loc.nth.return_value = mock_switch
+            loc.last = mock_switch
+            return loc
         elif "Next" in selector or "Save" in selector or "Accept" in selector:
             loc.first = mock_btn
             return loc
