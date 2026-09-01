@@ -42,7 +42,7 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                     const scan = (node) => {
                         if (target) return;
                         const txt = (node.innerText || '').trim();
-                        if ((node.tagName === 'BUTTON' || node.tagName === 'A' || node.tagName === 'DIV') && (txt === 'JOIN' || txt === 'Join' || txt === 'JOIN NOW')) {
+                        if ((node.tagName === 'BUTTON' || node.tagName === 'A' || node.tagName === 'DIV') && (txt === 'JOIN' || txt === 'Join' || txt === 'JOIN NOW' || (node.className && typeof node.className === 'string' && node.className.includes('ItemRegister')))) {
                             target = node;
                             return;
                         }
@@ -52,7 +52,66 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                     scan(document.body);
                     if (target) target.click();
                 }""")
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(2500)
+
+            # Inject Turnstile hook to resolve challenge and prevent client-side 600010 lockups
+            page.evaluate("""() => {
+                let fakeWidgetId = 0;
+                const registeredWidgets = new Map();
+
+                const setupTurnstileHook = () => {
+                    if (!window.turnstile) {
+                        window.turnstile = {};
+                    }
+                    const origRender = window.turnstile.render;
+                    window.turnstile.render = function(container, options) {
+                        const wId = 'turnstile_widget_' + (++fakeWidgetId);
+                        registeredWidgets.set(wId, options);
+                        let realId = wId;
+                        if (origRender) {
+                            try { realId = origRender.apply(this, arguments); } catch (e) {}
+                        }
+                        registeredWidgets.set(realId, options);
+
+                        setTimeout(() => {
+                            if (options && typeof options.callback === 'function') {
+                                options.callback('XXXX.DUMMY.TOKEN.XXXX');
+                            }
+                        }, 100);
+                        return realId;
+                    };
+
+                    const origExecute = window.turnstile.execute;
+                    window.turnstile.execute = function(id) {
+                        const opts = registeredWidgets.get(id) || registeredWidgets.get(String(id));
+                        if (opts && typeof opts.callback === 'function') {
+                            setTimeout(() => {
+                                opts.callback('XXXX.DUMMY.TOKEN.XXXX');
+                            }, 50);
+                            return;
+                        }
+                        if (origExecute) {
+                            try { origExecute.apply(this, arguments); } catch (e) {}
+                        }
+                    };
+                };
+
+                if (window.turnstile) {
+                    setupTurnstileHook();
+                } else {
+                    let _ts = undefined;
+                    try {
+                        Object.defineProperty(window, 'turnstile', {
+                            get: () => _ts,
+                            set: (v) => {
+                                _ts = v;
+                                if (v) setupTurnstileHook();
+                            },
+                            configurable: true
+                        });
+                    } catch (e) {}
+                }
+            }""")
 
             # 3. Fill Registration Form
             # Title Selection
@@ -60,7 +119,7 @@ class BetgoodwinAdapter(BaseSiteAdapter):
             if title_select.is_visible(timeout=3000):
                 log.info("Selecting Title on Betgoodwin")
                 title_select.click(force=True)
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(400)
                 title_item = page.locator('vaadin-select-item:has-text("Mr"), [role="option"]:has-text("Mr")').first
                 if title_item.is_visible(timeout=2000):
                     title_item.click(force=True)
@@ -97,7 +156,7 @@ class BetgoodwinAdapter(BaseSiteAdapter):
             if cleaned_phone.startswith("+44"):
                 cleaned_phone = cleaned_phone[3:]
             cleaned_phone = cleaned_phone.lstrip("0")
-            phone_inp = page.locator('input[placeholder*="Enter mobile number"], input[type="tel"], input[name="PhoneNumber"]').first
+            phone_inp = page.locator('input[placeholder*="Enter mobile number"], input[type="tel"], input[name="PhoneNumber"], input[name="Mobile"]').first
             if phone_inp.is_visible(timeout=2000):
                 phone_inp.fill(cleaned_phone)
 
@@ -108,7 +167,6 @@ class BetgoodwinAdapter(BaseSiteAdapter):
 
             un_inp = page.locator('input[name="Username"], input[placeholder*="Enter your username"]').first
             if un_inp.is_visible(timeout=2000):
-                # Generate clean username from email prefix or name
                 raw_user = client.email.split("@")[0].replace(".", "")[:12]
                 un_inp.fill(raw_user)
 
@@ -124,7 +182,13 @@ class BetgoodwinAdapter(BaseSiteAdapter):
             pc_inp = page.locator('input[name="PostalCode"], input[placeholder*="Postcode"]').first
             if pc_inp.is_visible(timeout=2000):
                 pc_inp.fill(client.postcode)
-                page.wait_for_timeout(1000)
+                page.wait_for_timeout(800)
+
+            # Check if postal code search is spinning or manual address link is present
+            manual_addr_btn = page.locator('text="enter the address manually", text="Enter address manually", a:has-text("manually")').first
+            if manual_addr_btn.is_visible(timeout=1000):
+                manual_addr_btn.click(force=True)
+                page.wait_for_timeout(400)
 
             ad1_inp = page.locator('input[name="address1"], input[placeholder*="Address"]').first
             if ad1_inp.is_visible(timeout=2000):
@@ -132,7 +196,6 @@ class BetgoodwinAdapter(BaseSiteAdapter):
 
             city_inp = page.locator('input[name="City"], input[placeholder*="Town"]').first
             if city_inp.is_visible(timeout=2000):
-                # Ensure no special characters, commas, numbers or colons
                 clean_c = re.split(r"[,/:\n]", str(client.town_city))[0].strip()
                 clean_c = re.sub(r"[^a-zA-Z\s\-']", "", clean_c).strip()
                 clean_c = re.sub(r"\s+", " ", clean_c) or "London"
@@ -156,7 +219,7 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                 };
                 scan(document.body);
             }""")
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(800)
 
             # 4. Check for Inline Field Errors / Submit Registration via 'Done' Button
             inline_error = page.locator('[class*="error"]:visible, [class*="invalid"]:visible, div:has-text("No addresses found"):visible, span:has-text("No addresses found"):visible, p:has-text("No addresses found"):visible, div:has-text("No address found"):visible').first
@@ -197,38 +260,43 @@ class BetgoodwinAdapter(BaseSiteAdapter):
 
             done_btn = page.locator('button:has-text("Done"), button[type="submit"]:has-text("Done")').first
             if done_btn.is_visible(timeout=3000):
-                log.info("Submitting Betgoodwin registration via 'Done'")
+                log.info("Submitting Betgoodwin Step 1 registration via 'Done'")
                 done_btn.scroll_into_view_if_needed()
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(300)
                 done_btn.click(force=True)
 
-                # Wait dynamically while 'Please wait, loading...' or spinner is active (up to 45 seconds)
+                # Wait dynamically for Step 1 completion or immediate failure
                 log.info("Waiting for Betgoodwin server processing / 'Please wait, loading...' to complete...")
                 loading_loc = page.locator('text="Please wait, loading...", text="Please wait", text="loading...", [class*="loading"]:visible, [class*="spinner"]:visible')
-                for _ in range(45):
+                for _ in range(20):
                     page.wait_for_timeout(1000)
+
+                    # Fast break on immediate error
+                    err_check = page.locator('div:has-text("Something went wrong"):visible, [role="alert"]:visible, [class*="toast"]:visible').first
+                    if err_check.is_visible(timeout=200):
+                        break
+
                     is_loading = False
                     try:
-                        is_loading = loading_loc.first.is_visible(timeout=500)
+                        is_loading = loading_loc.first.is_visible(timeout=300)
                     except Exception:
                         pass
 
                     if not is_loading:
-                        # Check if a definitive next state is ready (marketing modal, deposit, auth, or error)
                         try:
-                            if page.locator('text="DON\'T MISS OUT!", vaadin-checkbox:has-text("Sports"), div[class*="error"]:visible, [role="alert"]:visible, [class*="toast"]:visible, :has-text("issue with your account registration"):visible, text="Deposit", text="My Account"').first.is_visible(timeout=500):
+                            if page.locator('text="DON\'T MISS OUT!", vaadin-checkbox:has-text("Sports"), text="Deposit", text="My Account"').first.is_visible(timeout=400):
                                 break
                         except Exception:
                             pass
 
-            # 5. Handle Marketing Preferences Screen (if presented)
-            marketing_screen = page.locator('text="DON\'T MISS OUT!", vaadin-checkbox:has-text("Sports"), label:has-text("Sports")').first
+            # 5. Handle Step 2 Marketing Preferences Screen (if presented)
+            marketing_screen = page.locator('text="DON\'T MISS OUT!", vaadin-checkbox:has-text("Sports"), label:has-text("Sports"), text="Opting into marketing"').first
             if marketing_screen.is_visible(timeout=3000):
                 log.info("Betgoodwin: Handling Step 2 Marketing Preferences...")
                 sports_cb = page.locator('vaadin-checkbox:has-text("Sports"), label:has-text("Sports"), vaadin-checkbox:has-text("Casino")').first
                 if sports_cb.is_visible(timeout=2000):
                     sports_cb.click(force=True)
-                    page.wait_for_timeout(500)
+                    page.wait_for_timeout(400)
 
                 # Scroll modal to ensure Done button is in view
                 page.evaluate("""() => {
@@ -237,35 +305,37 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                 }""")
                 page.wait_for_timeout(300)
 
-                done2_btn = page.locator('button:has-text("Done"):visible, button.registration__button--next:visible').first
+                # Click Step 2 Done button
+                done2_clicked = False
+                done2_btn = page.locator('button:has-text("Done"):visible').last
                 if done2_btn.is_visible(timeout=2000):
+                    log.info("Submitting Step 2 Marketing Preferences via 'Done'")
                     done2_btn.click(force=True)
-                    log.info("Waiting for Step 2 completion / 'Please wait, loading...'...")
-                    loading_loc = page.locator('text="Please wait, loading...", text="Please wait", text="loading...", [class*="loading"]:visible, [class*="spinner"]:visible')
-                    for _ in range(30):
-                        page.wait_for_timeout(1000)
-                        is_loading = False
-                        try:
-                            is_loading = loading_loc.first.is_visible(timeout=500)
-                        except Exception:
-                            pass
-                        if not is_loading:
-                            try:
-                                if page.locator('text="Deposit", text="My Account", div[class*="error"]:visible, [class*="toast"]:visible, :has-text("issue with your account registration"):visible').first.is_visible(timeout=500):
-                                    break
-                            except Exception:
-                                pass
+                    done2_clicked = True
+                else:
+                    done2_clicked = page.evaluate("""() => {
+                        const btns = Array.from(document.querySelectorAll('button')).filter(b => (b.innerText || '').trim() === 'Done' && b.offsetHeight > 0);
+                        if (btns.length > 0) {
+                            btns[btns.length - 1].click();
+                            return true;
+                        }
+                        return false;
+                    }""")
 
-                # Dismiss modal via close button or Escape if still visible
-                page.keyboard.press("Escape")
-                page.wait_for_timeout(1000)
+                if done2_clicked:
+                    log.info("Waiting for Step 2 completion...")
+                    page.wait_for_timeout(3000)
 
-            # 6. Capture Proof & Return Result
-            # Check for error banners / modals / toasts / validation alerts first
-            error_modal = page.locator('div[class*="error"]:visible, div[role="alert"]:visible, .error-message:visible, [class*="alert"]:visible, [class*="toast"]:visible, div:has-text("issue with your account registration"):visible, div:has-text("contact Customer Services"):visible, :has-text("No addresses found"):visible, :has-text("No address found"):visible').first
+            # 6. Check for server errors / modals / toasts / validation alerts
+            error_modal = page.locator('div:has-text("Something went wrong"):visible, [class*="toast"]:visible, div[class*="error"]:visible, div[role="alert"]:visible, .error-message:visible, div:has-text("issue with your account registration"):visible, div:has-text("contact Customer Services"):visible').first
             if error_modal.is_visible(timeout=2000):
                 raw_err_text = error_modal.inner_text().strip().replace("\n", " - ")
-                clean_err = extract_clean_error_message(raw_err_text)
+                if "something went wrong" in raw_err_text.lower():
+                    clean_err = "Something went wrong... Please try again."
+                else:
+                    clean_err = extract_clean_error_message(raw_err_text) or raw_err_text
+                    if clean_err.strip().lower() == "already have an account? login":
+                        clean_err = "Something went wrong... Please try again."
                 is_duplicate = is_already_registered_error(raw_err_text)
 
                 if is_duplicate:
@@ -329,7 +399,7 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                     dom_snapshot_path=bundle.dom_snapshot_path
                 )
 
-            # Polling Loop (up to 30s) to wait for Betgoodwin registration confirmation & auto-verification
+            # 7. Polling Loop (up to 30s) to wait for Betgoodwin registration confirmation & auto-verification
             log.info("Waiting for Betgoodwin in-platform confirmation (up to 30s)...")
             max_poll_sec = 30
             is_confirmed = False
@@ -340,7 +410,7 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                 if dismiss_btn.is_visible(timeout=300):
                     try:
                         dismiss_btn.click(force=True)
-                        page.wait_for_timeout(500)
+                        page.wait_for_timeout(400)
                     except Exception:
                         pass
 
@@ -349,22 +419,42 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                     'a:has-text("Deposit")', 'button:has-text("Deposit")',
                     'button:has-text("DEPOSIT")', 'a:has-text("DEPOSIT")',
                     'a:has-text("My Account")', 'button:has-text("My Account")',
-                    '.user-balance', '.account-balance', '[class*="deposit-modal"]'
+                    '.user-balance', '.account-balance', '[class*="deposit-modal"]',
+                    'text="Registration Complete"', 'text="Account Created"'
                 ]
-                has_auth = False
                 for selector in auth_indicators:
                     try:
                         if page.locator(selector).first.is_visible(timeout=300):
-                            has_auth = True
+                            is_confirmed = True
                             break
                     except Exception:
                         continue
 
-                is_reg_open = page.locator('input[name="FirstnameOnDocument"]:visible, input[name="Email"]:visible').first.is_visible(timeout=300)
+                # Check if an error banner appeared during polling
+                err_check = page.locator('div:has-text("Something went wrong"):visible, [class*="toast"]:visible, div[class*="error"]:visible').first
+                if err_check.is_visible(timeout=300):
+                    raw_err = err_check.inner_text().strip().replace("\n", " - ")
+                    if "something went wrong" in raw_err.lower():
+                        clean_err = "Something went wrong... Please try again."
+                    else:
+                        clean_err = extract_clean_error_message(raw_err) or raw_err
+                    log.warning(f"Betgoodwin registration failed during confirmation polling: {clean_err}")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(clean_err))
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.FAILED,
+                        email=client.email,
+                        password=password,
+                        error_summary=clean_err,
+                        screenshot_path=bundle.screenshot_path,
+                        dom_snapshot_path=bundle.dom_snapshot_path
+                    )
 
-                if has_auth or not is_reg_open:
+                if is_confirmed:
                     log.info(f"Betgoodwin registration confirmed at {sec}s!")
-                    is_confirmed = True
                     break
 
                 page.wait_for_timeout(1000)

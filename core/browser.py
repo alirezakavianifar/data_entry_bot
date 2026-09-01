@@ -272,8 +272,13 @@ class BrowserManager:
         if not self._browser:
             self.start()
 
+        # Determine natural user agent matching actual browser version to prevent sec-ch-ua client hint mismatches
+        browser_ver = self._browser.version if self._browser else "131.0.0.0"
+        clean_ver = browser_ver.split()[0]
+        natural_ua = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{clean_ver} Safari/537.36"
+
         context_kwargs: Dict[str, Any] = {
-            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "user_agent": natural_ua,
             "locale": "en-GB",
             "timezone_id": "Europe/London",
             "color_scheme": "dark",

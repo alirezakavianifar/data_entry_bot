@@ -33,7 +33,8 @@ Includes both a **Modern Desktop GUI Application** and a **Command-Line Interfac
   - Humanized natural typing cadence across all 5 registration steps with randomized inter-key delay and Bézier mouse coordinates.
   - Randomized security question selection and category-matched realistic UK answers (Maiden Names, First Pets, Birth Cities, School Names, Football Clubs).
   - In-session authenticated proof capture upon landing on the welcome screen with automatic progression into the main sportsbook dashboard (`Browse the Betfred Site`).
-- **⏳ QuinnBet Adaptive Auto-Verification & KYC Settle Engine:**
+- **⏳ QuinnBet Promotional Offer Targeting & Auto-Verification:**
+  - Prioritizes the promotional offer CTA button at the bottom of the offer section (`a.btn-green`) rather than generic top-right header buttons, guaranteeing customer qualification for the highest welcome bonuses and terms.
   - Dynamic adaptive monitoring (30s baseline settle, extending up to 90s while the auto-verification KYC spinner is active).
   - Automatically detects in-platform verification completion toasts, dismisses net deposit limit modals, and recognizes manual document upload requests while safely preserving valid credentials.
 - **🌐 Residential & Mobile Proxy Integration:**
@@ -249,24 +250,36 @@ To use a live Google Sheet instead of local Excel:
 
 ## 👁️ Visual Non-Headless Verification & Testing
 
-To visually observe registration, address matching, and deposit limit handling live on your screen in a visible Google Chrome window:
+To visually observe registration, address matching, form progression, and deposit handling live on your screen in a visible Google Chrome window:
 
-### Quick Launcher (`.bat`):
-Double-click **`run_visual_verification.bat`** in the project root and choose:
-- `1` for **BresBet**
-- `2` for **Star Sports**
-- `3` for **Planet Sport Bet**
-- `4` for **Bet St George**
-- `5` for **All Playbook Sites** (sequential)
+### 1. Playbook Engineering Sites (BresBet, Star Sports, Planet Sport Bet, Bet St George)
+- **Interactive Launcher**: Double-click **`run_visual_verification.bat`** in the project root.
+- **Command Line**:
+  ```powershell
+  python scripts\verify_nonheadless.py bresbet
+  python scripts\verify_nonheadless.py starsports
+  python scripts\verify_nonheadless.py planetsportbet
+  python scripts\verify_nonheadless.py betstgeorge
+  python scripts\verify_nonheadless.py playbook    # All 4 Playbook sites sequentially
+  python scripts\verify_nonheadless.py all         # All 8 supported bookmakers
+  ```
 
-### Command Line:
-```powershell
-python scripts\verify_nonheadless.py bresbet
-python scripts\verify_nonheadless.py planetsportbet
-python scripts\verify_nonheadless.py starsports
-python scripts\verify_nonheadless.py betstgeorge
-python scripts\verify_nonheadless.py all
-```
+### 2. Remaining Bookmakers (Betfred, QuinnBet, Betgoodwin, Fairplay Bet)
+- **Interactive Launcher**: Double-click **`run_visual_verification_other.bat`** in the project root:
+  - `1` for **Betfred**
+  - `2` for **QuinnBet**
+  - `3` for **Betgoodwin**
+  - `4` for **Fairplay Bet**
+  - `5` for **All Remaining Sites** (sequential)
+- **Command Line**:
+  ```powershell
+  python scripts\verify_nonheadless_other.py betfred
+  python scripts\verify_nonheadless_other.py quinnbet
+  python scripts\verify_nonheadless_other.py betgoodwin
+  python scripts\verify_nonheadless_other.py fairplaybet
+  python scripts\verify_nonheadless_other.py all       # All 4 remaining sites sequentially
+  ```
+
 The browser window will open on your desktop, type fields with human pacing, handle modals, and leave the result screen open for 8 seconds for inspection.
 
 ---

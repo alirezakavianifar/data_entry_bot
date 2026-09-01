@@ -46,11 +46,21 @@ class QuinnbetAdapter(BaseSiteAdapter):
 
             # 2. Locate and click Register / Join CTA
             if not page.url.endswith("/register"):
-                reg_btn = page.locator('button[data-testid="register-button"], a[href*="/register"], a:has-text("JOIN"), button:has-text("JOIN"), a:has-text("Register")').first
-                if reg_btn.is_visible(timeout=4000):
-                    log.info("Clicking Register CTA on QuinnBet")
-                    reg_btn.click(force=True)
+                # Prioritize promotional offer bottom CTA (e.g. green 'Join' button at the bottom of the offer description)
+                # to ensure qualifying for the higher welcome offer rather than the generic top-right header button
+                promo_btn = page.locator('a.btn-green:has-text("Join"), a.btn-green:has-text("JOIN"), .qs-intro a.btn-green, a.btn-green, main a:has-text("JOIN"), div.qs-intro a').first
+                if promo_btn.is_visible(timeout=3000):
+                    log.info("Clicking QuinnBet promotional offer JOIN button at bottom of page (a.btn-green)")
+                    promo_btn.scroll_into_view_if_needed()
+                    page.wait_for_timeout(400)
+                    promo_btn.click(force=True)
                     page.wait_for_timeout(2500)
+                else:
+                    reg_btn = page.locator('button[data-testid="register-button"], a[href*="/register"], a:has-text("JOIN"), button:has-text("JOIN"), a:has-text("Register")').first
+                    if reg_btn.is_visible(timeout=4000):
+                        log.info("Clicking fallback Register CTA on QuinnBet")
+                        reg_btn.click(force=True)
+                        page.wait_for_timeout(2500)
 
             _dismiss_cookies()
 

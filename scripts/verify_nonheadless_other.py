@@ -1,12 +1,15 @@
 """
-Non-Headless Visual Verification Script
-=======================================
+Non-Headless Visual Verification Script for Non-Playbook Bookmakers
+===================================================================
 Launches an interactive, visible Google Chrome / Chromium browser window on the desktop
-and executes live registration and onboarding steps so operators can visually observe
-field typing, address lookups, deposit limit handling, and status detection in real time.
+and executes live registration and onboarding steps for the remaining supported bookmakers:
+  - Betfred
+  - QuinnBet
+  - Betgoodwin
+  - Fairplay Bet
 
 Usage:
-    python scripts/verify_nonheadless.py [bresbet|starsports|planetsportbet|betstgeorge|all]
+    python scripts/verify_nonheadless_other.py [betfred|quinnbet|betgoodwin|fairplaybet|all]
 """
 
 import sys
@@ -25,24 +28,13 @@ if REPO_ROOT not in sys.path:
 from core.browser import BrowserManager
 from core.password_gen import generate_password
 from data.models import Client, RegistrationStatus
-from sites.bresbet import BresbetAdapter
-from sites.starsports import StarSportsAdapter
-from sites.planetsportbet import PlanetSportBetAdapter
-from sites.betstgeorge import BetStGeorgeAdapter
 from sites.betfred import BetfredAdapter
 from sites.quinnbet import QuinnbetAdapter
 from sites.betgoodwin import BetgoodwinAdapter
 from sites.fairplaybet import FairplayBetAdapter
 from core.logger import get_logger
 
-log = get_logger(step="VisualVerification")
-
-PLAYBOOK_ADAPTERS = {
-    "bresbet": BresbetAdapter,
-    "starsports": StarSportsAdapter,
-    "planetsportbet": PlanetSportBetAdapter,
-    "betstgeorge": BetStGeorgeAdapter,
-}
+log = get_logger(step="VisualVerificationOther")
 
 OTHER_ADAPTERS = {
     "betfred": BetfredAdapter,
@@ -51,38 +43,41 @@ OTHER_ADAPTERS = {
     "fairplaybet": FairplayBetAdapter,
 }
 
-AVAILABLE_ADAPTERS = {**PLAYBOOK_ADAPTERS, **OTHER_ADAPTERS}
 
-def run_visual_verification(target: str = "bresbet"):
+def run_visual_verification_other(target: str = "betfred"):
     target_clean = target.lower().strip()
-    
-    if target_clean == "all":
-        adapters_to_run = [cls() for cls in AVAILABLE_ADAPTERS.values()]
-    elif target_clean in ("playbook", "playmakers"):
-        adapters_to_run = [cls() for cls in PLAYBOOK_ADAPTERS.values()]
-    elif target_clean in ("other", "others", "rest", "nonplaybook"):
+
+    if target_clean in ("all", "other", "others"):
         adapters_to_run = [cls() for cls in OTHER_ADAPTERS.values()]
-    elif target_clean in AVAILABLE_ADAPTERS:
-        adapters_to_run = [AVAILABLE_ADAPTERS[target_clean]()]
+    elif target_clean in OTHER_ADAPTERS:
+        adapters_to_run = [OTHER_ADAPTERS[target_clean]()]
     else:
-        print(f"Unknown target '{target}'. Available options: {', '.join(AVAILABLE_ADAPTERS.keys())}, 'playbook', 'other', or 'all'")
-        adapters_to_run = [BresbetAdapter()]
+        print(f"Unknown target '{target}'. Available options: {', '.join(OTHER_ADAPTERS.keys())} or 'all'")
+        adapters_to_run = [BetfredAdapter()]
 
     print("\n" + "=" * 65)
-    print(" 🚀 LAUNCHING NON-HEADLESS VISUAL VERIFICATION")
+    print(" 🚀 LAUNCHING NON-HEADLESS VISUAL VERIFICATION (REMAINING SITES)")
     print(f" Target Site(s): {[a.site_name for a in adapters_to_run]}")
     print("=" * 65)
 
-    # Launch visible browser on the desktop with slow_mo to make actions clearly observable
+    # Launch visible browser on desktop with slow_mo to make actions clearly observable
     bm = BrowserManager(headless=False, slow_mo_ms=80)
     bm.start()
 
     try:
         for idx, adapter in enumerate(adapters_to_run, 1):
             unique_ts = int(time.time())
-            
-            FIRST_NAMES = ["Hamish", "Calum", "Archie", "Innes", "Alasdair", "Rory", "Ewan", "Finlay", "Gregor", "Lachlan", "Murdo", "Niall", "Callum", "Fergus", "Brodie", "Fraser", "Douglas", "Graham", "Stuart", "Cameron"]
-            LAST_NAMES = ["Balfour", "Macleod", "Drummond", "Crawford", "Guthrie", "Macintosh", "Campbell", "Sinclair", "Morrison", "Livingston", "Macdonald", "Mackenzie", "Ferguson", "Robertson", "Paterson"]
+
+            FIRST_NAMES = [
+                "Hamish", "Calum", "Archie", "Innes", "Alasdair", "Rory", "Ewan",
+                "Finlay", "Gregor", "Lachlan", "Murdo", "Niall", "Callum", "Fergus",
+                "Brodie", "Fraser", "Douglas", "Graham", "Stuart", "Cameron"
+            ]
+            LAST_NAMES = [
+                "Balfour", "Macleod", "Drummond", "Crawford", "Guthrie", "Macintosh",
+                "Campbell", "Sinclair", "Morrison", "Livingston", "Macdonald",
+                "Mackenzie", "Ferguson", "Robertson", "Paterson"
+            ]
             ADDRESSES = [
                 ("15 Victoria Street", "Perth", "PH2 8JW", "1990-04-14"),
                 ("34 St Andrews Square", "Glasgow", "G1 5PP", "1989-08-22"),
@@ -99,7 +94,7 @@ def run_visual_verification(target: str = "bresbet"):
             first = random.choice(FIRST_NAMES)
             last = random.choice(LAST_NAMES)
             addr, city, pc, dob = random.choice(ADDRESSES)
-            
+
             # Synthetic UK client with realistic identity details
             client = Client(
                 client_id=f"CLI_VIS_{adapter.site_id[:3]}_{unique_ts}",
@@ -153,6 +148,7 @@ def run_visual_verification(target: str = "bresbet"):
         bm.close()
         print("\n✅ Visual verification finished. Browser closed cleanly.")
 
+
 if __name__ == "__main__":
-    choice = sys.argv[1] if len(sys.argv) > 1 else "bresbet"
-    run_visual_verification(choice)
+    choice = sys.argv[1] if len(sys.argv) > 1 else "betfred"
+    run_visual_verification_other(choice)
