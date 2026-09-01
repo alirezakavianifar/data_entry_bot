@@ -1,3 +1,4 @@
+from typing import Optional
 from playwright.sync_api import Page
 from sites.base import (
     BaseSiteAdapter,
@@ -6,12 +7,12 @@ from sites.base import (
     is_pending_verification_error,
     human_type,
     human_pause,
+    handle_playbook_deposit_step,
     handle_playbook_safer_gambling_no_limit,
     select_matching_playbook_address
 )
 from data.models import Client, RegistrationResult, RegistrationStatus
 from core.logger import get_logger, capture_failure_bundle, capture_success_screenshot, capture_login_proof_screenshot
-
 
 
 class StarSportsAdapter(BaseSiteAdapter):
@@ -25,6 +26,39 @@ class StarSportsAdapter(BaseSiteAdapter):
             requires_uk_ip=False
         )
 
+    def navigate(self, page: Page) -> None:
+        """Navigates to Star Sports, dismissing cookie overlays."""
+        log = get_logger()
+        log.info(f"Navigating to Star Sports ({self.default_promo_url})...")
+        page.goto(self.default_promo_url, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(3000)
+
+        # Handle Cookie Consent
+        try:
+            cookie_btn = page.locator('button:has-text("Accept"), button:has-text("Allow"), button[id*="cookie" i]').first
+            if cookie_btn.is_visible(timeout=3000):
+                cookie_btn.click(force=True)
+                page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+        # Check if already on registration form or click Create Account/Register
+        try:
+            if not page.locator('aside[data-test="SignUpStepsContainer"]').first.is_visible(timeout=1000):
+                reg_btn = page.locator('a[data-test="register-button"], button[data-test="register-button"]').first
+                if reg_btn.is_visible(timeout=2000):
+                    reg_btn.click(force=True)
+                    page.wait_for_timeout(1000)
+        except Exception:
+            pass
+
+        try:
+            create_acc_btn = page.locator('button:has-text("Create Account"), a:has-text("Create Account"), button:has-text("Sign Up"), a:has-text("Sign Up")').first
+            if create_acc_btn.is_visible(timeout=2000):
+                create_acc_btn.click(force=True)
+                page.wait_for_timeout(1000)
+        except Exception:
+            pass
 
     def fill_registration(self, page: Page, client: Client, password: str) -> RegistrationResult:
         log = get_logger(client_id=client.client_id, site_id=self.site_id, step="fill_registration")
@@ -48,30 +82,23 @@ class StarSportsAdapter(BaseSiteAdapter):
 
             # 2. Step 1: Credentials & Sign Up drawer detection
             email_sel = 'input[data-test="landing-page-email-input"], input[data-test="email-input"], input[placeholder*="Email"], input[type="email"]'
-            signup_drawer = page.locator('aside[data-test="SignUpStepsContainer"]').first
-            if not signup_drawer.is_visible(timeout=2000):
-                reg_btn = page.locator('a[data-test="account-navigation-signup-link"], a:has-text("Sign Up"), button:has-text("Sign Up")').first
-                if reg_btn.is_visible(timeout=2000):
-                    log.info("Clicking Sign Up CTA on Star Sports")
-                    reg_btn.click(force=True)
-                    page.wait_for_timeout(2000)
-
+            
             # If promo drawer has "Create Account" or "Get Started" CTA before inputs
             create_acc_btn = page.locator('aside[data-test="SignUpStepsContainer"] button:has-text("Create Account"), button:has-text("Create Account"), button[data-test*="create-account"]').first
             if create_acc_btn.is_visible(timeout=2000):
-                log.info("Clicking Create Account CTA in promo drawer")
                 create_acc_btn.click(force=True)
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(1000)
 
-            try:
-                page.wait_for_selector(email_sel, timeout=15000, state="visible")
-            except Exception:
-                pass
+            # Wait for email input
+            email_input = page.locator(email_sel).first
+            if not email_input.is_visible(timeout=10000):
+                # Fallback: re-open clean signup URL
+                log.warning("Email input not found initially, navigating to https://starsports.bet/?account=signup")
+                page.goto("https://starsports.bet/?account=signup", wait_until="domcontentloaded", timeout=25000)
+                page.wait_for_timeout(2000)
+                email_input = page.locator(email_sel).first
 
-            email_inp = page.locator(email_sel).first
-            pwd_inp = page.locator('input[data-test="landing-page-password-input"], input[data-test="create-password-input"], input[placeholder*="password"]').first
-
-            if not email_inp.is_visible(timeout=3000) or not pwd_inp.is_visible(timeout=3000):
+            if not email_input.is_visible(timeout=10000):
                 bundle = capture_failure_bundle(page, client.client_id, self.site_id, "step1_inputs_missing")
                 return RegistrationResult(
                     client_id=client.client_id,
@@ -81,30 +108,29 @@ class StarSportsAdapter(BaseSiteAdapter):
                     status=RegistrationStatus.FAILED,
                     email=client.email,
                     password=password,
-                    error_summary="Step 1 registration inputs not found",
-                    screenshot_path=bundle.screenshot_path
+                    error_summary="Could not find Step 1 inputs (email field missing)",
+                    screenshot_path=bundle.screenshot_path,
+                    dom_snapshot_path=bundle.dom_snapshot_path
                 )
 
-            log.info(f"Filling Step 1 credentials for {client.email}")
-            human_type(email_inp, client.email, page)
-            human_pause(page, 0.4, 0.8)
-            human_type(pwd_inp, password, page)
-            human_pause(page, 0.6, 1.2)
+            # Fill Step 1 Inputs
+            log.info("Entering Step 1 credentials (email, password)...")
+            human_type(email_input, client.email)
+            page.wait_for_timeout(300)
 
-            # Dismiss Cookiebot if overlaying
-            cookie_btn = page.locator('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll, #CybotCookiebotDialogBodyButtonAccept, button:has-text("Allow all"), button:has-text("Accept")').first
-            if cookie_btn.is_visible(timeout=2000):
-                log.info("Accepting Cookiebot consent on Star Sports")
-                cookie_btn.click(force=True)
-                page.wait_for_timeout(1000)
+            password_sel = 'input[data-test="landing-page-password-input"], input[data-test="password-input"], input[data-test="create-password-input"], input[placeholder*="Password"], input[type="password"]'
+            pw_input = page.locator(password_sel).first
+            human_type(pw_input, password)
+            page.wait_for_timeout(500)
 
-            create_acc_btn = page.locator('button[data-test="create-account-button"]').first
-            if create_acc_btn.is_visible(timeout=2000):
-                create_acc_btn.click(force=True)
-                human_pause(page, 2.0, 3.5)
+            # Click Continue / Create Account to Step 2
+            step1_cont = page.locator('button[data-test="landing-page-sign-up-button"], button[data-test="sign-up-button"], button[data-test="create-account-button"], aside[data-test="SignUpStepsContainer"] button[data-test="next-button"], aside[data-test="SignUpStepsContainer"] button:has-text("Continue"), aside[data-test="SignUpStepsContainer"] button:has-text("Next")').first
+            if step1_cont.is_visible(timeout=2000):
+                step1_cont.click(force=True)
+                page.wait_for_timeout(2000)
 
-            # Check for Step 1 validation errors
-            step1_err = page.locator('div[class*="error"], span[class*="error"], p[class*="error"], [data-test*="error"], [class*="errorMessage"], [class*="error"]').first
+            # Check for Step 1 validation errors (e.g. email already exists)
+            step1_err = page.locator('div[data-test="error-message"], [class*="ErrorMessage"], .field-error, div[class*="error"], span[class*="error"], p[class*="error"], [data-test*="error"]').first
             if step1_err.is_visible(timeout=1500):
                 err_txt = step1_err.inner_text().strip()
                 if is_already_registered_error(err_txt) or any(kw in err_txt.lower() for kw in ["already exists", "in use", "already registered", "taken"]):
@@ -122,56 +148,11 @@ class StarSportsAdapter(BaseSiteAdapter):
                         screenshot_path=bundle.screenshot_path,
                         dom_snapshot_path=bundle.dom_snapshot_path
                     )
-                elif any(kw in err_txt.lower() for kw in ["invalid", "error", "required"]):
-                    log.warning(f"Step 1 validation error: {err_txt}")
-                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "step1_error", Exception(err_txt))
-                    return RegistrationResult(
-                        client_id=client.client_id,
-                        client_name=client.full_name,
-                        site_id=self.site_id,
-                        site_name=self.site_name,
-                        status=RegistrationStatus.FAILED,
-                        email=client.email,
-                        password=password,
-                        error_summary=f"Step 1 error: {err_txt}",
-                        screenshot_path=bundle.screenshot_path
-                    )
 
-            # 3. Step 2: Personal Details
-            try:
-                page.wait_for_selector('input[data-test="first-name-input"]', timeout=15000, state="visible")
-            except Exception:
-                pass
-
-            fn_inp = page.locator('input[data-test="first-name-input"]').first
-            ln_inp = page.locator('input[data-test="last-name-input"]').first
-            day_inp = page.locator('input[data-test="day-input"]').first
-            month_inp = page.locator('input[data-test="month-input"]').first
-            year_inp = page.locator('input[data-test="year-input"]').first
-            num_inp = page.locator('input[data-test="number-input"]').first
-            postcode_inp = page.locator('input[data-test="postcode-input"]').first
-
-            if not fn_inp.is_visible(timeout=3000):
-                dup_err = page.locator('div[class*="error"]:visible, span[class*="error"]:visible, p[class*="error"]:visible, [data-test*="error"]:visible, :has-text("already exists"):visible, :has-text("in use"):visible').first
-                if dup_err.is_visible(timeout=1000):
-                    raw_txt = dup_err.inner_text().strip().replace("\n", " - ")
-                    clean_err = extract_clean_error_message(raw_txt) or raw_txt
-                    if is_already_registered_error(raw_txt) or "already exists" in raw_txt.lower():
-                        log.warning(f"Star Sports: Client {client.full_name} is ALREADY REGISTERED ({clean_err})")
-                        bundle = capture_failure_bundle(page, client.client_id, self.site_id, "already_registered")
-                        return RegistrationResult(
-                            client_id=client.client_id,
-                            client_name=client.full_name,
-                            site_id=self.site_id,
-                            site_name=self.site_name,
-                            status=RegistrationStatus.ALREADY_REGISTERED,
-                            email=client.email,
-                            password=password,
-                            account_reference="StarSports-Existing",
-                            error_summary=f"Already registered: {clean_err}",
-                            screenshot_path=bundle.screenshot_path,
-                            dom_snapshot_path=bundle.dom_snapshot_path
-                        )
+            # 3. Step 2: Personal Details & Address
+            fname_sel = 'input[data-test="first-name-input"], input[name="firstName"], input[placeholder*="First"]'
+            fname_input = page.locator(fname_sel).first
+            if not fname_input.is_visible(timeout=10000):
                 bundle = capture_failure_bundle(page, client.client_id, self.site_id, "step2_inputs_missing")
                 return RegistrationResult(
                     client_id=client.client_id,
@@ -181,42 +162,69 @@ class StarSportsAdapter(BaseSiteAdapter):
                     status=RegistrationStatus.FAILED,
                     email=client.email,
                     password=password,
-                    error_summary="Step 2 personal details inputs not visible",
-                    screenshot_path=bundle.screenshot_path
+                    error_summary="Could not find Step 2 inputs (first name missing)",
+                    screenshot_path=bundle.screenshot_path,
+                    dom_snapshot_path=bundle.dom_snapshot_path
                 )
 
-            # Select Title (Mr / Ms)
-            title_el = page.locator('[data-test="mr-title-choose-box"], [data-test="title-choose-box"] div:first-child, label:has-text("Mr")').first
-            if title_el.is_visible(timeout=2000):
-                title_el.click(force=True)
-                human_pause(page, 0.2, 0.5)
+            log.info("Entering Step 2 personal details (Name, DOB, Mobile)...")
+            # Star Sports strict alpha-only validation
+            import re
+            clean_first = re.sub(r'[^A-Za-z]', '', client.first_name) or "John"
+            clean_last = re.sub(r'[^A-Za-z]', '', client.last_name) or "Smith"
+            human_type(fname_input, clean_first)
+            page.wait_for_timeout(200)
 
-            log.info("Filling Step 2 Personal Details (Name, DOB, Phone, Postcode)")
-            human_type(fn_inp, client.first_name, page)
-            human_pause(page, 0.3, 0.7)
-            human_type(ln_inp, client.last_name, page)
-            human_pause(page, 0.3, 0.7)
-            day_inp.fill(str(int(client.dob_day)).zfill(2))
-            month_inp.fill(str(int(client.dob_month)).zfill(2))
-            year_inp.fill(str(client.dob_year))
-            human_pause(page, 0.3, 0.6)
+            lname_sel = 'input[data-test="last-name-input"], input[name="lastName"], input[placeholder*="Last"]'
+            lname_input = page.locator(lname_sel).first
+            human_type(lname_input, clean_last)
+            page.wait_for_timeout(200)
 
-            # Phone number (strip leading 0 as UK prefix +44 is pre-selected)
-            cleaned_phone = client.phone
-            if cleaned_phone.startswith("+44"):
-                cleaned_phone = cleaned_phone[3:]
-            cleaned_phone = cleaned_phone.lstrip("0")
-            human_type(num_inp, cleaned_phone, page)
-            human_pause(page, 0.4, 0.8)
+            # Title Selection (Playbook select)
+            try:
+                title_dropdown = page.locator('[data-component="Select"]:has-text("Title"), [data-test="title-select"]').first
+                if title_dropdown.is_visible(timeout=500):
+                    title_dropdown.click(force=True)
+                    page.wait_for_timeout(300)
+                    title_opt = page.locator('div[role="option"]:has-text("Mr"), li:has-text("Mr"), span:has-text("Mr")').first
+                    if title_opt.is_visible(timeout=500):
+                        title_opt.click(force=True)
+            except Exception:
+                pass
 
-            # Postcode & Smart Address Lookup / Fallback
-            human_type(postcode_inp, client.postcode, page)
-            human_pause(page, 0.5, 1.0)
+            # DOB Inputs
+            day_inp = page.locator('input[data-test="dob-day-input"], input[name="day"], input[placeholder="DD"]').first
+            month_inp = page.locator('input[data-test="dob-month-input"], input[name="month"], input[placeholder="MM"]').first
+            year_inp = page.locator('input[data-test="dob-year-input"], input[name="year"], input[placeholder="YYYY"]').first
 
+            human_type(day_inp, f"{int(client.dob_day):02d}")
+            human_type(month_inp, f"{int(client.dob_month):02d}")
+            human_type(year_inp, str(client.dob_year))
+            page.wait_for_timeout(300)
+
+            # Mobile Phone Input
+            phone_inp = page.locator('input[data-test="phone-number-input"], input[name="phoneNumber"], input[type="tel"]').first
+            clean_phone = client.phone
+            if clean_phone.startswith("+44"):
+                clean_phone = "0" + clean_phone[3:]
+            elif not clean_phone.startswith("0"):
+                clean_phone = "0" + clean_phone
+            human_type(phone_inp, clean_phone)
+            page.wait_for_timeout(300)
+
+            # Address Selection / Manual Fallback via Shared Playbook Engine
             select_matching_playbook_address(page, client, log)
 
-            # 4. Step 2 Submission: Agree & Join
-            agree_btn = page.locator('button[data-test="agree-and-join-button"]').first
+            # 4. Marketing Consents & Terms
+            try:
+                no_marketing = page.locator('label:has-text("No"), input[name*="marketing"][value="no"]').first
+                if no_marketing.is_visible(timeout=500):
+                    no_marketing.click(force=True)
+            except Exception:
+                pass
+
+            # Agree & Join / Submit
+            agree_btn = page.locator('button[data-test="agree-and-join-button"], button[data-test="submit-button"], button:has-text("Agree & Join"), button:has-text("Join Now"), button:has-text("Create My Account")').first
             if agree_btn.is_visible(timeout=3000):
                 log.info("Simulating human review before submitting registration...")
                 human_pause(page, 3.0, 6.0)
@@ -226,7 +234,6 @@ class StarSportsAdapter(BaseSiteAdapter):
                 agree_btn.click(force=True)
                 page.wait_for_timeout(4000)
 
-            # 5. Confirm Registration Success
             # Check for error message under Agree & Join or in SignUpStepsContainer
             error_el = page.locator('[data-test="error-message-content"]:visible, aside[data-test="SignUpStepsContainer"] [class*="MessageWrapper"]:visible, [data-test*="error"]:visible').first
             if error_el.is_visible(timeout=3000):
@@ -273,10 +280,13 @@ class StarSportsAdapter(BaseSiteAdapter):
             has_auth = False
 
             for sec in range(1, max_poll_sec + 1):
-                # 1. Always attempt to detect and handle Playbook Safer Gambling / Deposit Limit onboarding
+                # 1. First, detect and skip Deposit drawer if open
+                handle_playbook_deposit_step(page, log if sec % 5 == 1 else None)
+
+                # 2. Detect and handle Playbook Safer Gambling / Deposit Limit onboarding
                 handle_playbook_safer_gambling_no_limit(page, log if sec % 5 == 1 else None)
 
-                # Check if Safer Gambling onboarding form is still active in the DOM
+                # Check if Safer Gambling or Deposit onboarding form is still active in the DOM
                 is_onboarding_open = any(
                     page.locator(sel).first.is_visible(timeout=100)
                     for sel in [
@@ -284,6 +294,8 @@ class StarSportsAdapter(BaseSiteAdapter):
                         'aside[data-test="SignUpStepsContainer"]:has-text("Net deposit limits")',
                         'aside[data-test="SignUpStepsContainer"]:has-text("deposit limit")',
                         'aside[data-test="SignUpStepsContainer"]:has-text("Turn on reality check")',
+                        'aside[data-test="SignUpStepsContainer"]:has-text("DEPOSIT")',
+                        'aside[data-test="SignUpStepsContainer"]:has-text("Deposit")',
                         'div[role="dialog"]:has-text("SAFER GAMBLING")',
                         'div[class*="modal"]:has-text("SAFER GAMBLING")'
                     ]
@@ -418,7 +430,6 @@ class StarSportsAdapter(BaseSiteAdapter):
                 screenshot_path=bundle.screenshot_path
             )
 
-
     def login(
         self,
         page: Page,
@@ -507,5 +518,3 @@ class StarSportsAdapter(BaseSiteAdapter):
             log.error(f"Star Sports login error: {e}")
             bundle = capture_failure_bundle(page, cid, self.site_id, "login_exception", e)
             return False, bundle.screenshot_path, str(e)
-
-

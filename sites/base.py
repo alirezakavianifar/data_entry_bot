@@ -431,6 +431,152 @@ def select_matching_playbook_address(page: Page, client: Client, log=None) -> bo
         return False
 
 
+def handle_playbook_deposit_step(page: Page, log=None) -> bool:
+    """
+    Specifically detects the post-registration Playbook Engineering Deposit / Payment step
+    and immediately dismisses it by clicking 'Skip', 'Deposit Later', 'Maybe Later', or the close CTA.
+    CRITICAL: Never clicks the 'Deposit' button or submits the payment form.
+    """
+    try:
+        # Check if the Deposit step is currently open in the DOM
+        is_deposit_step = False
+        try:
+            res = page.evaluate("""() => {
+                const container = document.querySelector('aside[data-test="SignUpStepsContainer"], [data-test="SignUpStepsContainer"], div[class*="modal"], div[class*="drawer"]');
+                if (!container) return false;
+                
+                const txt = (container.innerText || container.textContent || '').toLowerCase();
+                const hasDepositHeader = txt.includes('deposit') || txt.includes('payment method') || txt.includes('add card') || txt.includes('card details');
+                const isSaferGambling = txt.includes('safer gambling') || txt.includes('net deposit limits') || txt.includes('turn on reality check') || txt.includes('rolling net') || txt.includes('happy with my current choice');
+                
+                const hasPaymentInputs = !!container.querySelector('input[placeholder*="card" i], input[name*="card" i], input[data-test*="card" i], [data-component*="Payment"], [data-component*="Deposit"]');
+                
+                return (hasDepositHeader || hasPaymentInputs) && !isSaferGambling;
+            }""")
+            is_deposit_step = res is True
+        except Exception:
+            is_deposit_step = False
+
+        if not is_deposit_step:
+            return False
+
+        if log:
+            log.info("Playbook Deposit drawer detected — clicking 'Skip' / 'Deposit Later' to proceed to dashboard...")
+
+        # Prioritized Skip Selectors (Buttons and Links)
+        skip_selectors = [
+            'aside[data-test="SignUpStepsContainer"] button[data-test*="skip" i]',
+            'aside[data-test="SignUpStepsContainer"] a[data-test*="skip" i]',
+            'aside[data-test="SignUpStepsContainer"] button:has-text("Skip")',
+            'aside[data-test="SignUpStepsContainer"] button:has-text("SKIP")',
+            'aside[data-test="SignUpStepsContainer"] a:has-text("Skip")',
+            'aside[data-test="SignUpStepsContainer"] a:has-text("SKIP")',
+            'aside[data-test="SignUpStepsContainer"] button:has-text("Deposit Later")',
+            'aside[data-test="SignUpStepsContainer"] button:has-text("Deposit later")',
+            'aside[data-test="SignUpStepsContainer"] a:has-text("Deposit Later")',
+            'aside[data-test="SignUpStepsContainer"] a:has-text("Deposit later")',
+            'aside[data-test="SignUpStepsContainer"] button:has-text("Maybe Later")',
+            'aside[data-test="SignUpStepsContainer"] button:has-text("Maybe later")',
+            'aside[data-test="SignUpStepsContainer"] a:has-text("Maybe Later")',
+            'aside[data-test="SignUpStepsContainer"] a:has-text("Maybe later")',
+            'aside[data-test="SignUpStepsContainer"] button:has-text("Skip for now")',
+            'aside[data-test="SignUpStepsContainer"] a:has-text("Skip for now")',
+            'aside[data-test="SignUpStepsContainer"] button:has-text("I\'ll do this later")',
+            'aside[data-test="SignUpStepsContainer"] a:has-text("I\'ll do this later")',
+            'aside[data-test="SignUpStepsContainer"] button:has-text("Not now")',
+            'aside[data-test="SignUpStepsContainer"] a:has-text("Not now")',
+            'button[data-test*="skip" i]',
+            'a[data-test*="skip" i]',
+            'button:has-text("Skip")',
+            'button:has-text("SKIP")',
+            'a:has-text("Skip")',
+            'a:has-text("SKIP")',
+            'button:has-text("Deposit Later")',
+            'button:has-text("Deposit later")',
+            'a:has-text("Deposit Later")',
+            'a:has-text("Deposit later")',
+            'button:has-text("Maybe Later")',
+            'button:has-text("Maybe later")',
+            'a:has-text("Maybe Later")',
+            'a:has-text("Maybe later")',
+            'button:has-text("Skip for now")',
+            'a:has-text("Skip for now")',
+            'button:has-text("I\'ll do this later")',
+            'a:has-text("I\'ll do this later")',
+            'button:has-text("Not now")',
+            'a:has-text("Not now")',
+            # Fallback Close Buttons
+            'aside[data-test="SignUpStepsContainer"] button[data-test*="close" i]',
+            'aside[data-test="SignUpStepsContainer"] button[aria-label*="Close" i]',
+            'aside[data-test="SignUpStepsContainer"] [data-component*="Close"]',
+            'aside[data-test="SignUpStepsContainer"] [data-test="close-icon"]',
+            'aside[data-test="SignUpStepsContainer"] button[class*="close" i]',
+            'button[data-test="modal-close-button"]',
+            'button[data-test="close-button"]',
+            'button[aria-label="Close"]'
+        ]
+
+        clicked = False
+        for s_sel in skip_selectors:
+            try:
+                el = page.locator(s_sel).first
+                if el.is_visible(timeout=150):
+                    if log:
+                        log.info(f"Clicking Skip Deposit control: {s_sel}")
+                    el.scroll_into_view_if_needed()
+                    el.click(force=True, timeout=1000)
+                    page.wait_for_timeout(500)
+                    clicked = True
+                    break
+            except Exception:
+                continue
+
+        # JavaScript & React Fiber fallback for Skip
+        if not clicked:
+            try:
+                res = page.evaluate("""() => {
+                    const container = document.querySelector('aside[data-test="SignUpStepsContainer"], [data-test="SignUpStepsContainer"], body');
+                    if (!container) return false;
+                    
+                    const els = Array.from(container.querySelectorAll('button, a, span, div'));
+                    const skipKeywords = ['skip', 'deposit later', 'maybe later', 'skip for now', 'not now', "i'll do this later", 'close'];
+                    
+                    const skipTarget = els.find(el => {
+                        const t = (el.innerText || el.textContent || '').trim().toLowerCase();
+                        const dt = (el.getAttribute('data-test') || '').toLowerCase();
+                        const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+                        // STRICT EXCLUSION: Never match Deposit button
+                        if (t === 'deposit' || t.startsWith('deposit £') || dt === 'deposit-button') return false;
+                        return skipKeywords.some(k => t === k || t.startsWith(k)) || dt.includes('skip') || dt.includes('close') || aria.includes('close');
+                    });
+                    
+                    if (skipTarget) {
+                        for (const key in skipTarget) {
+                            if (key.startsWith('__reactProps') || key.startsWith('__reactEvents') || key.startsWith('__reactFiber')) {
+                                const props = skipTarget[key];
+                                if (props && typeof props.onClick === 'function') {
+                                    try { props.onClick({ target: skipTarget, currentTarget: skipTarget }); } catch (e) {}
+                                }
+                            }
+                        }
+                        skipTarget.click();
+                        return true;
+                    }
+                    return false;
+                }""")
+                if res:
+                    clicked = True
+                    page.wait_for_timeout(500)
+            except Exception:
+                pass
+
+        return clicked
+    except Exception as e:
+        if log:
+            log.warning(f"Error in handle_playbook_deposit_step: {e}")
+        return False
+
+
 def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
     """
     Specifically detects and physically completes the Playbook Engineering Safer Gambling
@@ -444,9 +590,27 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
     """
     import random
     try:
+        # Check if the modal is currently on the Deposit step rather than Safer Gambling
+        try:
+            res = page.evaluate("""() => {
+                const container = document.querySelector('aside[data-test="SignUpStepsContainer"], [data-test="SignUpStepsContainer"]');
+                if (!container) return false;
+                const txt = (container.innerText || container.textContent || '').toLowerCase();
+                const hasDeposit = txt.includes('deposit') || txt.includes('payment method') || txt.includes('add card');
+                const isSaferGambling = txt.includes('safer gambling') || txt.includes('net deposit limits') || txt.includes('turn on reality check') || txt.includes('rolling net') || txt.includes('happy with my current choice');
+                return hasDeposit && !isSaferGambling;
+            }""")
+            if res is True:
+                return handle_playbook_deposit_step(page, log)
+        except Exception:
+            pass
+
         modal_selectors = [
-            'aside[data-test="SignUpStepsContainer"]',
-            '[data-test="SignUpStepsContainer"]',
+            'aside[data-test="SignUpStepsContainer"]:has-text("SAFER GAMBLING")',
+            'aside[data-test="SignUpStepsContainer"]:has-text("Net deposit limits")',
+            'aside[data-test="SignUpStepsContainer"]:has-text("deposit limit")',
+            'aside[data-test="SignUpStepsContainer"]:has-text("reality check")',
+            'aside[data-test="SignUpStepsContainer"]:has-text("happy with my current choice")',
             'aside[data-test="SignUpStepsContainer"] legend:has-text("SAFER GAMBLING")',
             'aside[data-test="SignUpStepsContainer"] h2:has-text("SAFER GAMBLING")',
             'aside[data-test="SignUpStepsContainer"] h1:has-text("SAFER GAMBLING")',
@@ -791,13 +955,19 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
                 except Exception:
                     pass
 
-            # Step 5: Click Progression CTA (Next / Save & Continue / Done / Confirm / Accept / Acknowledge)
+            # Step 5: Click Progression CTA (Next / Save & Continue / Done / Confirm / Accept / Acknowledge / Skip)
             progression_buttons = [
                 'button[data-test="next-button"]',
+                'button[data-test="skip-button"]',
+                'button:has-text("Skip")',
+                'button:has-text("SKIP")',
+                'a:has-text("Skip")',
+                'a:has-text("SKIP")',
                 'button[data-test="save-button"]',
                 'button[data-test="done-button"]',
                 'button[data-test="accept-button"]',
                 'button[data-test*="next" i]',
+                'button[data-test*="skip" i]',
                 'button[data-test*="save" i]',
                 'button[data-test*="continue" i]',
                 'button[data-test*="done" i]',
@@ -827,16 +997,27 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
                 'button:has-text("Got it")',
                 'button:has-text("Understood")',
                 'button:has-text("Agree & Join")',
-                'button:has-text("Skip")',
                 'button:has-text("Maybe later")',
-                'a:has-text("Skip")',
-                'button[type="submit"]'
+                'button:has-text("Deposit Later")',
+                'button:has-text("Deposit later")',
+                'a:has-text("Deposit Later")',
+                'a:has-text("Deposit later")'
             ]
             btn_clicked = False
             for btn_sel in progression_buttons:
                 try:
                     btn = page.locator(btn_sel).first
                     if btn.is_visible(timeout=200):
+                        # Strict check: Never click a button that actually says "Deposit" without "Later"
+                        try:
+                            txt = btn.inner_text()
+                            if isinstance(txt, str):
+                                txt_lower = txt.strip().lower()
+                                if txt_lower == "deposit" or (txt_lower.startswith("deposit") and "later" not in txt_lower):
+                                    continue
+                        except Exception:
+                            pass
+
                         if log and pass_num == 1:
                             log.info(f"Clicking Safer Gambling progression button: {btn_sel}")
                         btn.scroll_into_view_if_needed()
@@ -871,8 +1052,12 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
                         const nextBtn = btns.find(b => {
                             const t = (b.innerText || b.textContent || b.value || '').trim().toLowerCase();
                             const dt = (b.getAttribute('data-test') || '').toLowerCase();
-                            return ['next', 'save & continue', 'save and continue', 'save', 'done', 'finish', 'confirm', 'continue', 'agree & join', 'accept', 'acknowledge', 'got it', 'understood', 'skip'].includes(t) ||
-                                   dt.includes('next') || dt.includes('save') || dt.includes('continue') || dt.includes('done') || dt.includes('accept');
+                            
+                            // STRICT EXCLUSION: Never match Deposit action button
+                            if (t === 'deposit' || t.startsWith('deposit £') || dt === 'deposit-button') return false;
+                            
+                            return ['next', 'skip', 'deposit later', 'maybe later', 'save & continue', 'save and continue', 'save', 'done', 'finish', 'confirm', 'continue', 'agree & join', 'accept', 'acknowledge', 'got it', 'understood'].includes(t) ||
+                                   dt.includes('next') || dt.includes('skip') || dt.includes('save') || dt.includes('continue') || dt.includes('done') || dt.includes('accept');
                         });
                         if (nextBtn) {
                             nextBtn.removeAttribute('disabled');

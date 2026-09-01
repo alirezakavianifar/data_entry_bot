@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from sites.base import (
+    handle_playbook_deposit_step,
     handle_playbook_safer_gambling_no_limit,
     select_matching_playbook_address,
     human_type,
@@ -902,7 +903,7 @@ def test_handle_playbook_rolling_net_deposit_limit_with_scroll_and_input():
             loc.nth.return_value = mock_switch
             loc.last = mock_switch
             return loc
-        elif "Next" in selector or "Save" in selector or "Accept" in selector:
+        elif any(k in selector.lower() for k in ["next", "save", "accept", "done", "confirm", "continue"]):
             loc.first = mock_btn
             return loc
         else:
@@ -923,5 +924,33 @@ def test_handle_playbook_rolling_net_deposit_limit_with_scroll_and_input():
     assert mock_switch.click.called or mock_btn.click.called
 
 
+def test_handle_playbook_deposit_step_clicks_skip():
+    mock_page = MagicMock()
+    mock_page.evaluate.return_value = True
+
+    mock_skip_btn = MagicMock()
+    mock_skip_btn.is_visible.return_value = True
+
+    def locator_side_effect(selector):
+        loc = MagicMock()
+        if "skip" in selector.lower() or "deposit later" in selector.lower():
+            loc.first = mock_skip_btn
+            return loc
+        else:
+            loc.is_visible.return_value = False
+            loc.first.is_visible.return_value = False
+            return loc
+
+    mock_page.locator.side_effect = locator_side_effect
+
+    handled = handle_playbook_deposit_step(mock_page)
+    assert handled is True
+    assert mock_skip_btn.click.called
 
 
+def test_handle_playbook_deposit_step_ignored_when_closed():
+    mock_page = MagicMock()
+    mock_page.evaluate.return_value = False
+
+    handled = handle_playbook_deposit_step(mock_page)
+    assert handled is False

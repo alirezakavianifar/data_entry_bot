@@ -7,6 +7,7 @@ from sites.base import (
     is_pending_verification_error,
     human_type,
     human_pause,
+    handle_playbook_deposit_step,
     handle_playbook_safer_gambling_no_limit,
     select_matching_playbook_address
 )
@@ -276,10 +277,13 @@ class BresbetAdapter(BaseSiteAdapter):
             has_auth = False
 
             for sec in range(1, max_poll_sec + 1):
-                # 1. Always attempt to detect and handle Playbook Safer Gambling / Deposit Limit onboarding
+                # 1. First, detect and skip Deposit drawer if open
+                handle_playbook_deposit_step(page, log if sec % 5 == 1 else None)
+
+                # 2. Detect and handle Playbook Safer Gambling / Deposit Limit onboarding
                 handle_playbook_safer_gambling_no_limit(page, log if sec % 5 == 1 else None)
 
-                # Check if Safer Gambling onboarding form is still active in the DOM
+                # Check if Safer Gambling or Deposit onboarding form is still active in the DOM
                 is_onboarding_open = any(
                     page.locator(sel).first.is_visible(timeout=100)
                     for sel in [
@@ -287,6 +291,8 @@ class BresbetAdapter(BaseSiteAdapter):
                         'aside[data-test="SignUpStepsContainer"]:has-text("Net deposit limits")',
                         'aside[data-test="SignUpStepsContainer"]:has-text("deposit limit")',
                         'aside[data-test="SignUpStepsContainer"]:has-text("Turn on reality check")',
+                        'aside[data-test="SignUpStepsContainer"]:has-text("DEPOSIT")',
+                        'aside[data-test="SignUpStepsContainer"]:has-text("Deposit")',
                         'div[role="dialog"]:has-text("SAFER GAMBLING")',
                         'div[class*="modal"]:has-text("SAFER GAMBLING")'
                     ]
