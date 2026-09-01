@@ -1,9 +1,18 @@
 import re
 from typing import Optional
 from playwright.sync_api import Page
-from sites.base import BaseSiteAdapter, extract_clean_error_message, is_already_registered_error
+from sites.base import (
+    BaseSiteAdapter,
+    extract_clean_error_message,
+    is_already_registered_error,
+    human_type,
+    human_pause,
+    human_click,
+    human_scroll
+)
 from data.models import Client, RegistrationResult, RegistrationStatus
 from core.logger import get_logger, capture_failure_bundle, capture_success_screenshot, capture_login_proof_screenshot
+from core.password_gen import generate_password
 
 
 class BetgoodwinAdapter(BaseSiteAdapter):
@@ -14,7 +23,7 @@ class BetgoodwinAdapter(BaseSiteAdapter):
             site_id="betgoodwin",
             site_name="Betgoodwin",
             default_promo_url=promo_url,
-            requires_uk_ip=False
+            requires_uk_ip=True
         )
 
 
@@ -22,19 +31,24 @@ class BetgoodwinAdapter(BaseSiteAdapter):
         log = get_logger(client_id=client.client_id, site_id=self.site_id, step="fill_registration")
         log.info(f"Starting Betgoodwin registration flow for {client.full_name}")
 
+        # Ensure password length is strictly between 8 and 14 characters as required
+        if not (8 <= len(password) <= 14):
+            password = generate_password(length=12)
+            log.info("Generated Betgoodwin compliant password of length 12 (between 8 and 14)")
+
         try:
             # 1. Cookiebot Consent Handling
             cookie_btn = page.locator('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll, #CybotCookiebotDialogBodyButtonAccept, button:has-text("Allow all"), button:has-text("Accept")').first
             if cookie_btn.is_visible(timeout=3000):
                 log.info("Accepting Cookiebot consent on Betgoodwin")
-                cookie_btn.click(force=True)
-                page.wait_for_timeout(1000)
+                human_click(cookie_btn, page)
+                human_pause(page, 0.8, 1.4)
 
             # 2. Click JOIN / Claim Offer CTA
             join_btn = page.locator('text=JOIN, button:has-text("JOIN"), a:has-text("JOIN"), button:has-text("Join"), a:has-text("Claim"), div.ItemRegister').first
             if join_btn.is_visible(timeout=2000):
                 log.info("Clicking Betgoodwin JOIN CTA via locator")
-                join_btn.click(force=True)
+                human_click(join_btn, page)
             else:
                 log.info("Clicking Betgoodwin JOIN CTA via deep JS evaluation")
                 page.evaluate("""() => {
@@ -52,7 +66,7 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                     scan(document.body);
                     if (target) target.click();
                 }""")
-            page.wait_for_timeout(2500)
+            human_pause(page, 2.0, 3.0)
 
             # Inject Turnstile hook to resolve challenge and prevent client-side 600010 lockups
             page.evaluate("""() => {
@@ -113,25 +127,29 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                 }
             }""")
 
-            # 3. Fill Registration Form
+            # 3. Fill Registration Form with realistic human pacing
             # Title Selection
             title_select = page.locator('vaadin-select[name="Title"], select-input.general-input--Title, general-input.general-input--Title').first
             if title_select.is_visible(timeout=3000):
                 log.info("Selecting Title on Betgoodwin")
-                title_select.click(force=True)
-                page.wait_for_timeout(400)
+                human_click(title_select, page)
+                human_pause(page, 0.4, 0.7)
                 title_item = page.locator('vaadin-select-item:has-text("Mr"), [role="option"]:has-text("Mr")').first
                 if title_item.is_visible(timeout=2000):
-                    title_item.click(force=True)
-                    page.wait_for_timeout(300)
+                    human_click(title_item, page)
+                    human_pause(page, 0.3, 0.6)
 
             # First & Last Name
             fn_inp = page.locator('input[name="FirstnameOnDocument"], input[name*="firstName" i]').first
             ln_inp = page.locator('input[name="LastNameOnDocument"], input[name*="lastName" i]').first
             if fn_inp.is_visible(timeout=3000):
-                fn_inp.fill(client.first_name)
+                log.info("Entering first name with human typing...")
+                human_type(fn_inp, client.first_name, page=page, min_delay_ms=30, max_delay_ms=65)
+                human_pause(page, 0.3, 0.6)
             if ln_inp.is_visible(timeout=2000):
-                ln_inp.fill(client.last_name)
+                log.info("Entering last name with human typing...")
+                human_type(ln_inp, client.last_name, page=page, min_delay_ms=30, max_delay_ms=65)
+                human_pause(page, 0.3, 0.6)
 
             # Date of Birth (ISO YYYY-MM-DD for vaadin-date-picker)
             dob_iso = f"{int(client.dob_year)}-{int(client.dob_month):02d}-{int(client.dob_day):02d}"
@@ -149,7 +167,7 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                 scan(document.body);
             }}""")
             page.keyboard.press("Escape")
-            page.wait_for_timeout(300)
+            human_pause(page, 0.4, 0.7)
 
             # Mobile Phone (strip +44 and leading 0)
             cleaned_phone = client.phone
@@ -158,68 +176,89 @@ class BetgoodwinAdapter(BaseSiteAdapter):
             cleaned_phone = cleaned_phone.lstrip("0")
             phone_inp = page.locator('input[placeholder*="Enter mobile number"], input[type="tel"], input[name="PhoneNumber"], input[name="Mobile"]').first
             if phone_inp.is_visible(timeout=2000):
-                phone_inp.fill(cleaned_phone)
+                log.info("Entering mobile phone with human typing...")
+                human_type(phone_inp, cleaned_phone, page=page, min_delay_ms=35, max_delay_ms=75)
+                human_pause(page, 0.3, 0.6)
 
             # Email & Username
             em_inp = page.locator('input[name="Email"], input[type="email"]').first
             if em_inp.is_visible(timeout=2000):
-                em_inp.fill(client.email)
+                log.info("Entering email with human typing...")
+                human_type(em_inp, client.email, page=page, min_delay_ms=25, max_delay_ms=60)
+                human_pause(page, 0.3, 0.6)
 
             un_inp = page.locator('input[name="Username"], input[placeholder*="Enter your username"]').first
             if un_inp.is_visible(timeout=2000):
                 raw_user = client.email.split("@")[0].replace(".", "")[:12]
-                un_inp.fill(raw_user)
+                log.info("Entering username with human typing...")
+                human_type(un_inp, raw_user, page=page, min_delay_ms=30, max_delay_ms=65)
+                human_pause(page, 0.3, 0.6)
 
-            # Password & Confirmation
+            # Password & Confirmation (between 8 and 14 characters)
             pw1_inp = page.locator('input[name="Password"]').first
             pw2_inp = page.locator('input[name="PasswordDuplicate"]').first
             if pw1_inp.is_visible(timeout=2000):
-                pw1_inp.fill(password)
+                log.info("Entering password with human typing...")
+                human_type(pw1_inp, password, page=page, min_delay_ms=30, max_delay_ms=70)
+                human_pause(page, 0.3, 0.6)
             if pw2_inp.is_visible(timeout=2000):
-                pw2_inp.fill(password)
+                log.info("Entering password confirmation with human typing...")
+                human_type(pw2_inp, password, page=page, min_delay_ms=30, max_delay_ms=70)
+                human_pause(page, 0.3, 0.6)
 
             # Address Details (Postcode, Street, City)
             pc_inp = page.locator('input[name="PostalCode"], input[placeholder*="Postcode"]').first
             if pc_inp.is_visible(timeout=2000):
-                pc_inp.fill(client.postcode)
-                page.wait_for_timeout(800)
+                log.info("Entering postcode with human typing...")
+                human_type(pc_inp, client.postcode, page=page, min_delay_ms=35, max_delay_ms=75)
+                human_pause(page, 1.0, 1.8)
 
             # Check if postal code search is spinning or manual address link is present
             manual_addr_btn = page.locator('text="enter the address manually", text="Enter address manually", a:has-text("manually")').first
             if manual_addr_btn.is_visible(timeout=1000):
-                manual_addr_btn.click(force=True)
-                page.wait_for_timeout(400)
+                human_click(manual_addr_btn, page)
+                human_pause(page, 0.3, 0.6)
 
             ad1_inp = page.locator('input[name="address1"], input[placeholder*="Address"]').first
             if ad1_inp.is_visible(timeout=2000):
-                ad1_inp.fill(client.address_line1)
+                log.info("Entering address line 1 with human typing...")
+                human_type(ad1_inp, client.address_line1, page=page, min_delay_ms=30, max_delay_ms=65)
+                human_pause(page, 0.3, 0.6)
 
             city_inp = page.locator('input[name="City"], input[placeholder*="Town"]').first
             if city_inp.is_visible(timeout=2000):
                 clean_c = re.split(r"[,/:\n]", str(client.town_city))[0].strip()
                 clean_c = re.sub(r"[^a-zA-Z\s\-']", "", clean_c).strip()
                 clean_c = re.sub(r"\s+", " ", clean_c) or "London"
-                city_inp.fill(clean_c)
+                log.info("Entering city with human typing...")
+                human_type(city_inp, clean_c, page=page, min_delay_ms=30, max_delay_ms=65)
+                human_pause(page, 0.3, 0.6)
 
             # Affiliate / Promo Code
             btag_inp = page.locator('input[name="Btag"]').first
             if btag_inp.is_visible(timeout=1000):
-                btag_inp.fill("WELCOME15")
+                human_type(btag_inp, "WELCOME15", page=page, min_delay_ms=30, max_delay_ms=60)
+                human_pause(page, 0.3, 0.5)
 
-            # Terms & Conditions Checkbox
-            page.evaluate("""() => {
-                const scan = (node) => {
-                    if (node.tagName === 'VAADIN-CHECKBOX' && (node.className.includes('checkbox__input') || (node.parentElement && node.parentElement.tagName === 'CHECKBOX-INPUT'))) {
-                        node.checked = true;
-                        node.dispatchEvent(new CustomEvent('change', { bubbles: true }));
-                        node.dispatchEvent(new CustomEvent('checked-changed', { detail: { value: true } }));
-                    }
-                    if (node.shadowRoot) Array.from(node.shadowRoot.children).forEach(scan);
-                    Array.from(node.children).forEach(scan);
-                };
-                scan(document.body);
-            }""")
-            page.wait_for_timeout(800)
+            # Tick "I am 18" & Terms and Conditions Checkbox
+            log.info("Ticking 'I am 18' and Terms & Conditions box...")
+            terms_cb = page.locator('vaadin-checkbox:has-text("18"), vaadin-checkbox[name*="Terms" i], checkbox-input:has-text("18")').first
+            if terms_cb.is_visible(timeout=1500):
+                human_click(terms_cb, page)
+            else:
+                page.evaluate("""() => {
+                    const scan = (node) => {
+                        if (node.tagName === 'VAADIN-CHECKBOX' && (node.innerText.includes('18') || node.className.includes('checkbox__input') || (node.parentElement && node.parentElement.tagName === 'CHECKBOX-INPUT'))) {
+                            node.checked = true;
+                            node.dispatchEvent(new CustomEvent('change', { bubbles: true }));
+                            node.dispatchEvent(new CustomEvent('checked-changed', { detail: { value: true } }));
+                        }
+                        if (node.shadowRoot) Array.from(node.shadowRoot.children).forEach(scan);
+                        Array.from(node.children).forEach(scan);
+                    };
+                    scan(document.body);
+                }""")
+            human_pause(page, 1.0, 1.6)
 
             # 4. Check for Inline Field Errors / Submit Registration via 'Done' Button
             inline_error = page.locator('[class*="error"]:visible, [class*="invalid"]:visible, div:has-text("No addresses found"):visible, span:has-text("No addresses found"):visible, p:has-text("No addresses found"):visible, div:has-text("No address found"):visible').first
@@ -258,12 +297,16 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                         dom_snapshot_path=bundle.dom_snapshot_path
                     )
 
+            # Human review pause before pressing Done on bottom
+            log.info("Simulating human review pause before pressing Done on bottom...")
+            human_pause(page, 1.8, 3.2)
+
             done_btn = page.locator('button:has-text("Done"), button[type="submit"]:has-text("Done")').first
             if done_btn.is_visible(timeout=3000):
-                log.info("Submitting Betgoodwin Step 1 registration via 'Done'")
+                log.info("Pressing Done on bottom via human click...")
                 done_btn.scroll_into_view_if_needed()
-                page.wait_for_timeout(300)
-                done_btn.click(force=True)
+                human_pause(page, 0.4, 0.8)
+                human_click(done_btn, page)
 
                 # Wait dynamically for Step 1 completion or immediate failure
                 log.info("Waiting for Betgoodwin server processing / 'Please wait, loading...' to complete...")
@@ -292,28 +335,27 @@ class BetgoodwinAdapter(BaseSiteAdapter):
             # 5. Handle Step 2 Marketing Preferences Screen (if presented)
             marketing_screen = page.locator('text="DON\'T MISS OUT!", vaadin-checkbox:has-text("Sports"), label:has-text("Sports"), text="Opting into marketing"').first
             if marketing_screen.is_visible(timeout=3000):
-                log.info("Betgoodwin: Handling Step 2 Marketing Preferences...")
+                log.info("Betgoodwin: Handling Step 2 Marketing Preferences with human pacing...")
+                human_pause(page, 0.8, 1.4)
                 sports_cb = page.locator('vaadin-checkbox:has-text("Sports"), label:has-text("Sports"), vaadin-checkbox:has-text("Casino")').first
                 if sports_cb.is_visible(timeout=2000):
-                    sports_cb.click(force=True)
-                    page.wait_for_timeout(400)
+                    human_click(sports_cb, page)
+                    human_pause(page, 0.5, 1.0)
 
                 # Scroll modal to ensure Done button is in view
                 page.evaluate("""() => {
                     const scrollables = Array.from(document.querySelectorAll('div, form')).filter(el => el.scrollHeight > el.clientHeight);
                     scrollables.forEach(s => s.scrollTop = s.scrollHeight);
                 }""")
-                page.wait_for_timeout(300)
+                human_pause(page, 0.5, 1.0)
 
                 # Click Step 2 Done button
-                done2_clicked = False
                 done2_btn = page.locator('button:has-text("Done"):visible').last
                 if done2_btn.is_visible(timeout=2000):
-                    log.info("Submitting Step 2 Marketing Preferences via 'Done'")
-                    done2_btn.click(force=True)
-                    done2_clicked = True
+                    log.info("Submitting Step 2 Marketing Preferences via Done...")
+                    human_click(done2_btn, page)
                 else:
-                    done2_clicked = page.evaluate("""() => {
+                    page.evaluate("""() => {
                         const btns = Array.from(document.querySelectorAll('button')).filter(b => (b.innerText || '').trim() === 'Done' && b.offsetHeight > 0);
                         if (btns.length > 0) {
                             btns[btns.length - 1].click();
@@ -322,9 +364,8 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                         return false;
                     }""")
 
-                if done2_clicked:
-                    log.info("Waiting for Step 2 completion...")
-                    page.wait_for_timeout(3000)
+                log.info("Waiting for Step 2 completion...")
+                page.wait_for_timeout(3000)
 
             # 6. Check for server errors / modals / toasts / validation alerts
             error_modal = page.locator('div:has-text("Something went wrong"):visible, [class*="toast"]:visible, div[class*="error"]:visible, div[role="alert"]:visible, .error-message:visible, div:has-text("issue with your account registration"):visible, div:has-text("contact Customer Services"):visible').first

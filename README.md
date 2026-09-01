@@ -37,6 +37,12 @@ Includes both a **Modern Desktop GUI Application** and a **Command-Line Interfac
   - Prioritizes the promotional offer CTA button at the bottom of the offer section (`a.btn-green`) rather than generic top-right header buttons, guaranteeing customer qualification for the highest welcome bonuses and terms.
   - Dynamic adaptive monitoring (30s baseline settle, extending up to 90s while the auto-verification KYC spinner is active).
   - Automatically detects in-platform verification completion toasts, dismisses net deposit limit modals, and recognizes manual document upload requests while safely preserving valid credentials.
+- **🏇 BetGoodwin Human-Paced Registration Engine:**
+  - Enforces password lengths strictly between 8 and 14 characters meeting BetGoodwin security policies.
+  - Simulates realistic human typing cadence with inter-key digraph jitter across all fields (Name, Email, Mobile, Username, Password, Postcode, Address).
+  - Integrates natural reading/thinking pauses (0.3s–1.8s) between form controls.
+  - Ticks the 18+ and Terms & Conditions checkbox with realistic mouse targeting.
+  - Executes a human review pause before pressing the bottom Done button, preventing anti-bot velocity triggers.
 - **🌐 Residential & Mobile Proxy Integration:**
   - Built-in support for UK Residential and 4G/5G Mobile Proxies (`PROXY_SERVER`, `PROXY_USERNAME`, `PROXY_PASSWORD`) ensuring requests originate from residential UK ASNs.
 - **Human Pacing & Randomized Delay Engine (15–20s):**

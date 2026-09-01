@@ -1,5 +1,12 @@
 from playwright.sync_api import Page
-from sites.base import BaseSiteAdapter, extract_clean_error_message, is_already_registered_error
+from sites.base import (
+    BaseSiteAdapter,
+    extract_clean_error_message,
+    is_already_registered_error,
+    human_mouse_move,
+    human_pause,
+    human_click
+)
 from data.models import Client, RegistrationResult, RegistrationStatus
 from core.logger import get_logger, capture_failure_bundle, capture_success_screenshot, capture_login_proof_screenshot
 
@@ -46,20 +53,75 @@ class QuinnbetAdapter(BaseSiteAdapter):
 
             # 2. Locate and click Register / Join CTA
             if not page.url.endswith("/register"):
+                # Inject visual cursor so the user can visibly track the mouse movement down across the screen
+                try:
+                    page.evaluate("""() => {
+                        if (document.getElementById('playwright-visual-cursor')) return;
+                        const cursor = document.createElement('div');
+                        cursor.id = 'playwright-visual-cursor';
+                        cursor.style.position = 'fixed';
+                        cursor.style.zIndex = '999999999';
+                        cursor.style.width = '20px';
+                        cursor.style.height = '20px';
+                        cursor.style.borderRadius = '50%';
+                        cursor.style.background = 'rgba(255, 0, 0, 0.85)';
+                        cursor.style.border = '2px solid white';
+                        cursor.style.boxShadow = '0 0 10px rgba(0,0,0,0.6)';
+                        cursor.style.pointerEvents = 'none';
+                        cursor.style.transform = 'translate(-50%, -50%)';
+                        cursor.style.top = '120px';
+                        cursor.style.left = '960px';
+                        cursor.style.transition = 'width 0.1s, height 0.1s';
+                        document.body.appendChild(cursor);
+
+                        window.addEventListener('mousemove', (e) => {
+                            cursor.style.left = e.clientX + 'px';
+                            cursor.style.top = e.clientY + 'px';
+                        });
+                        window.addEventListener('mousedown', () => {
+                            cursor.style.background = 'rgba(0, 255, 0, 0.9)';
+                            cursor.style.width = '28px';
+                            cursor.style.height = '28px';
+                        });
+                        window.addEventListener('mouseup', () => {
+                            cursor.style.background = 'rgba(255, 0, 0, 0.85)';
+                            cursor.style.width = '20px';
+                            cursor.style.height = '20px';
+                        });
+                    }""")
+                except Exception:
+                    pass
+
                 # Prioritize promotional offer bottom CTA (e.g. green 'Join' button at the bottom of the offer description)
                 # to ensure qualifying for the higher welcome offer rather than the generic top-right header button
                 promo_btn = page.locator('a.btn-green:has-text("Join"), a.btn-green:has-text("JOIN"), .qs-intro a.btn-green, a.btn-green, main a:has-text("JOIN"), div.qs-intro a').first
                 if promo_btn.is_visible(timeout=3000):
-                    log.info("Clicking QuinnBet promotional offer JOIN button at bottom of page (a.btn-green)")
+                    log.info("Visibly moving mouse down to QuinnBet promotional offer JOIN button at bottom of page (a.btn-green)...")
                     promo_btn.scroll_into_view_if_needed()
                     page.wait_for_timeout(400)
-                    promo_btn.click(force=True)
+
+                    # Start mouse from top center and move down visibly to the bottom button
+                    try:
+                        page.mouse.move(960, 140)
+                        page.wait_for_timeout(300)
+                        box = promo_btn.bounding_box()
+                        if box:
+                            target_x = box["x"] + box["width"] / 2
+                            target_y = box["y"] + box["height"] / 2
+                            human_mouse_move(page, target_x, target_y, steps=30)
+                            promo_btn.evaluate("el => { el.style.outline = '3px solid #00ff00'; el.style.boxShadow = '0 0 20px #00ff00'; }")
+                            promo_btn.hover()
+                            human_pause(page, 1.2, 2.0)
+                    except Exception:
+                        pass
+
+                    human_click(promo_btn, page)
                     page.wait_for_timeout(2500)
                 else:
                     reg_btn = page.locator('button[data-testid="register-button"], a[href*="/register"], a:has-text("JOIN"), button:has-text("JOIN"), a:has-text("Register")').first
                     if reg_btn.is_visible(timeout=4000):
                         log.info("Clicking fallback Register CTA on QuinnBet")
-                        reg_btn.click(force=True)
+                        human_click(reg_btn, page)
                         page.wait_for_timeout(2500)
 
             _dismiss_cookies()
