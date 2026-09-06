@@ -131,3 +131,162 @@ def test_betgoodwin_success_flow(sample_client):
 
     assert result.status == RegistrationStatus.SUCCESS
     assert result.site_id == "betgoodwin"
+
+
+def test_betgoodwin_checkbox_targets_part_and_scrolls_to_done(sample_client):
+    adapter = BetgoodwinAdapter()
+    mock_page = MagicMock()
+    mock_page.context.pages = [mock_page]
+
+    part_box_mock = MagicMock()
+    part_box_mock.is_visible.return_value = True
+    part_box_mock.first = part_box_mock
+
+    terms_cb_mock = MagicMock()
+    terms_cb_mock.is_visible.return_value = True
+    terms_cb_mock.first = terms_cb_mock
+    terms_cb_mock.locator.return_value = part_box_mock
+    terms_cb_mock.evaluate.return_value = True
+
+    done_btn_mock = MagicMock()
+    done_btn_mock.is_visible.return_value = True
+    done_btn_mock.first = done_btn_mock
+
+    def locator_side_effect(selector):
+        loc = MagicMock()
+        if "vaadin-checkbox" in selector:
+            return terms_cb_mock
+        elif "Done" in selector:
+            return done_btn_mock
+        elif "error" in selector or "invalid" in selector:
+            loc.is_visible.return_value = False
+            loc.first.is_visible.return_value = False
+        elif "Deposit" in selector or "My Account" in selector:
+            loc.first.is_visible.return_value = True
+        else:
+            loc.first.is_visible.return_value = False
+            loc.is_visible.return_value = False
+        return loc
+
+    mock_page.locator.side_effect = locator_side_effect
+
+    with patch("sites.betgoodwin.human_click") as mock_human_click, \
+         patch("sites.betgoodwin.human_scroll") as mock_human_scroll, \
+         patch("sites.betgoodwin.capture_success_screenshot", return_value="success.png"):
+        result = adapter.fill_registration(mock_page, sample_client, "Goodwin2026!a")
+
+    # Verifies that human_click was invoked with part_box_mock, not the outer label
+    mock_human_click.assert_any_call(part_box_mock, mock_page)
+    # Verifies scroll to Done was executed
+    mock_human_scroll.assert_called()
+    done_btn_mock.scroll_into_view_if_needed.assert_called()
+    assert result.status == RegistrationStatus.SUCCESS
+
+
+def test_client_resolved_title_variations():
+    # Male default
+    c_male = Client(
+        client_id="CLI_M",
+        full_name="Daniel Buckley",
+        first_name="Daniel",
+        last_name="Buckley",
+        email="d@example.com",
+        phone="07700900111",
+        address_line1="1 High St",
+        town_city="London",
+        postcode="SW1A 1AA"
+    )
+    assert c_male.resolved_title == "Mr."
+    assert c_male.resolved_title_clean == "Mr"
+
+    # Female heuristic
+    c_female = Client(
+        client_id="CLI_F",
+        full_name="Holly Shaw",
+        first_name="Holly",
+        last_name="Shaw",
+        email="h@example.com",
+        phone="07700900222",
+        address_line1="2 High St",
+        town_city="Derby",
+        postcode="DE1 1AA"
+    )
+    assert c_female.resolved_title == "Mrs."
+    assert c_female.resolved_title_clean == "Mrs"
+
+    # Explicit title
+    c_explicit = Client(
+        client_id="CLI_E",
+        full_name="Courtney Weaver",
+        first_name="Courtney",
+        last_name="Weaver",
+        title="Miss",
+        email="c@example.com",
+        phone="07700900333",
+        address_line1="3 High St",
+        town_city="Leeds",
+        postcode="LS1 1AA"
+    )
+    assert c_explicit.resolved_title == "Miss"
+    assert c_explicit.resolved_title_clean == "Miss"
+
+    # Full name prefix
+    c_prefix = Client(
+        client_id="CLI_P",
+        full_name="Ms Laura Allen",
+        first_name="Laura",
+        last_name="Allen",
+        email="l@example.com",
+        phone="07700900444",
+        address_line1="4 High St",
+        town_city="Bristol",
+        postcode="BS1 1AA"
+    )
+    assert c_prefix.resolved_title == "Ms."
+    assert c_prefix.resolved_title_clean == "Ms"
+
+
+def test_betgoodwin_title_selection_executed_with_client_title():
+    adapter = BetgoodwinAdapter()
+    mock_page = MagicMock()
+
+    client_female = Client(
+        client_id="CLI_BG_FEMALE",
+        full_name="Sarah Mennell",
+        first_name="Sarah",
+        last_name="Mennell",
+        email="sarah.mennell.999@gmail.com",
+        phone="07700900444",
+        dob="1991-04-12",
+        address_line1="12 Park Lane",
+        town_city="Manchester",
+        postcode="M1 1AA"
+    )
+
+    eval_calls = []
+    def on_evaluate(script, *args):
+        eval_calls.append((script, args))
+        return True
+    mock_page.evaluate.side_effect = on_evaluate
+
+    def locator_side_effect(selector):
+        loc = MagicMock()
+        if "error" in selector:
+            loc.is_visible.return_value = False
+            loc.first.is_visible.return_value = False
+        elif "Deposit" in selector or "My Account" in selector:
+            loc.first.is_visible.return_value = True
+        else:
+            loc.first.is_visible.return_value = False
+            loc.is_visible.return_value = False
+        return loc
+    mock_page.locator.side_effect = locator_side_effect
+
+    with patch("sites.betgoodwin.capture_success_screenshot", return_value="success.png"):
+        result = adapter.fill_registration(mock_page, client_female, "Goodwin2026!a")
+
+    # Check that evaluate was called with 'Mrs.' for Sarah
+    title_eval = [args[0] for script, args in eval_calls if "VAADIN-SELECT" in script and "Title" in script and args]
+    assert len(title_eval) > 0, "Expected Title selection evaluation to be called"
+    assert title_eval[0] == "Mrs.", f"Expected 'Mrs.' for female client Sarah, got {title_eval[0]}"
+    assert result.status == RegistrationStatus.SUCCESS

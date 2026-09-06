@@ -118,6 +118,7 @@ class GoogleSheetsProvider(BaseDataProvider):
                 card = get_cell("card").strip()
                 va = (get_cell("allocated") or get_cell("va")).strip()
                 notes = get_cell("note").strip()
+                raw_title = (get_cell("title") or get_cell("salutation")).strip() or None
 
                 client_id = f"CLI_{row_num:04d}_{''.join(c for c in full_name.lower() if c.isalnum())[:10]}"
 
@@ -127,6 +128,7 @@ class GoogleSheetsProvider(BaseDataProvider):
                         full_name=full_name,
                         first_name=first_name.strip() or full_name.split(" ")[0],
                         last_name=last_name.strip() or (full_name.split(" ")[-1] if " " in full_name else ""),
+                        title=raw_title,
                         dob=dob_date,
                         email=email,
                         phone=phone,

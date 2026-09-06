@@ -4,6 +4,7 @@ from sites.base import (
     handle_playbook_deposit_step,
     handle_playbook_safer_gambling_no_limit,
     select_matching_playbook_address,
+    sanitize_playbook_address,
     human_type,
     human_pause
 )
@@ -954,3 +955,82 @@ def test_handle_playbook_deposit_step_ignored_when_closed():
 
     handled = handle_playbook_deposit_step(mock_page)
     assert handled is False
+
+
+def test_handle_playbook_deposit_step_planetsportbet_skip_button():
+    """
+    Verifies that when Planet Sport Bet's deposit screen is open with data-test='skip-button',
+    handle_playbook_deposit_step scrolls into view and clicks the SKIP button.
+    """
+    mock_page = MagicMock()
+    mock_page.evaluate.return_value = True
+
+    mock_skip_btn = MagicMock()
+    mock_skip_btn.is_visible.return_value = True
+
+    def locator_side_effect(selector):
+        loc = MagicMock()
+        if 'data-test="skip-button"' in selector or 'button:has-text("SKIP")' in selector or 'button:has-text("Skip")' in selector:
+            loc.first = mock_skip_btn
+            return loc
+        else:
+            loc.is_visible.return_value = False
+            loc.first.is_visible.return_value = False
+            return loc
+
+    mock_page.locator.side_effect = locator_side_effect
+
+    handled = handle_playbook_deposit_step(mock_page)
+    assert handled is True
+    assert mock_skip_btn.click.called
+    assert mock_skip_btn.scroll_into_view_if_needed.called
+
+
+def test_handle_playbook_deposit_step_react_fiber_fallback():
+    """
+    Verifies that if DOM locators do not match, the React Fiber JS evaluator fallback is executed
+    and successfully clicks the skip target.
+    """
+    mock_page = MagicMock()
+    # 1st evaluate call (detection): True
+    # 2nd evaluate call (scrolling): None
+    # 3rd evaluate call (React Fiber fallback): True
+    mock_page.evaluate.side_effect = [True, None, True]
+
+    # All locators report not visible
+    loc = MagicMock()
+    loc.is_visible.return_value = False
+    loc.first.is_visible.return_value = False
+    mock_page.locator.return_value = loc
+
+    handled = handle_playbook_deposit_step(mock_page)
+    assert handled is True
+    assert mock_page.evaluate.call_count >= 2
+
+
+def test_handle_playbook_safer_gambling_delegates_to_deposit_skip():
+    """
+    Verifies that if handle_playbook_safer_gambling_no_limit is called while already on
+    the deposit step, it delegates immediately to handle_playbook_deposit_step.
+    """
+    mock_page = MagicMock()
+    mock_page.evaluate.return_value = True
+
+    with patch("sites.base.handle_playbook_deposit_step", return_value=True) as mock_dep:
+        handled = handle_playbook_safer_gambling_no_limit(mock_page)
+        assert handled is True
+        assert mock_dep.called
+
+
+def test_sanitize_playbook_address():
+    # Slashes in Scottish flat numbers
+    assert sanitize_playbook_address("0/1 34 St. Andrews Square") == "0-1 34 St. Andrews Square"
+    assert sanitize_playbook_address("Flat 1/2, 10 High Street") == "Flat 1-2, 10 High Street"
+    assert sanitize_playbook_address(r"12\A Queens Road") == "12-A Queens Road"
+
+    # Ampersands replaced with 'and'
+    assert sanitize_playbook_address("Marks & Spencer Flat 2") == "Marks and Spencer Flat 2"
+
+    # Forbidden special characters stripped
+    assert sanitize_playbook_address("Flat 3! @ 10 High St. %") == "Flat 3 @ 10 High St."
+

@@ -225,16 +225,48 @@ class FairplayBetAdapter(BaseSiteAdapter):
             submit_btn.click(force=True)
             page.wait_for_timeout(3000)
 
-        # 8. Polling Loop (up to 30s) to wait for "Please wait while we verify your details" spinner & confirmation
-        log.info("Waiting for Fairplay Bet in-platform verification & confirmation (up to 30s)...")
-        max_poll_sec = 30
+        # 8. Polling Loop (up to 180s / 3 minutes) to wait for "Verifying..." spinner to complete and confirm outcome
+        log.info("Waiting for Fairplay Bet in-platform verification & confirmation (up to 3 minutes / 180s)...")
+        max_poll_sec = 180
         is_confirmed = False
         email_verif_needed = False
         kyc_needed = False
         kyc_bundle = None
+        is_verifying_in_progress = False
 
         for sec in range(1, max_poll_sec + 1):
-            # A. Check for duplicate / server error modal
+            # 1. Check if identity verification is still in progress ("Verifying...", "Please wait while we verify your details", etc.)
+            is_verifying_in_progress = False
+            try:
+                verifying_el = page.locator(
+                    ':has-text("Please wait while we verify your details"):visible, '
+                    ':has-text("Verifying your details"):visible, '
+                    ':has-text("verifying your details"):visible, '
+                    ':has-text("Checking your details"):visible, '
+                    ':has-text("verifying your account"):visible, '
+                    'h1:has-text("Verifying"):visible, '
+                    'h2:has-text("Verifying"):visible, '
+                    'h3:has-text("Verifying"):visible, '
+                    'p:has-text("Verifying"):visible, '
+                    'div:has-text("Verifying..."):visible, '
+                    '[data-component*="Verifying"]:visible, '
+                    '[data-component*="Spinner"]:visible, '
+                    '[class*="spinner"]:visible'
+                ).first
+                if verifying_el.is_visible(timeout=250):
+                    v_txt = (verifying_el.inner_text() or "").lower()
+                    if any(w in v_txt for w in ["verifying", "verify your details", "checking", "please wait"]):
+                        is_verifying_in_progress = True
+            except Exception:
+                pass
+
+            if is_verifying_in_progress:
+                if sec % 10 == 0 or sec == 1:
+                    log.info(f"Fairplay Bet electronic identity verification in progress ({sec}/{max_poll_sec}s)... waiting for final outcome")
+                page.wait_for_timeout(1000)
+                continue
+
+            # 2. Check for duplicate / server error modal
             error_modal = page.locator(
                 'div[role="dialog"]:visible, '
                 'div[class*="modal"]:visible, '
@@ -243,6 +275,10 @@ class FairplayBetAdapter(BaseSiteAdapter):
                 'div[role="alert"]:visible, '
                 'div:has-text("already registered"):visible, '
                 'p:has-text("already registered"):visible, '
+                'div:has-text("Unable to verify"):visible, '
+                'p:has-text("Unable to verify"):visible, '
+                'div:has-text("Verification failed"):visible, '
+                'p:has-text("Verification failed"):visible, '
                 'h2:has-text("Error"):visible, '
                 'h3:has-text("Error"):visible, '
                 '.error-message:visible'
@@ -269,7 +305,7 @@ class FairplayBetAdapter(BaseSiteAdapter):
                         screenshot_path=bundle.screenshot_path,
                         dom_snapshot_path=bundle.dom_snapshot_path
                     )
-                elif any(k in raw_err_text.lower() for k in ("invalid", "rejected", "error", "failed")):
+                elif any(k in raw_err_text.lower() for k in ("invalid", "rejected", "error", "failed", "unable to verify", "verification failed")):
                     log.warning(f"Fairplay Bet registration error returned by server: {clean_err}")
                     bundle = capture_failure_bundle(page, client.client_id, self.site_id, "server_error", Exception(clean_err))
                     return RegistrationResult(
@@ -285,14 +321,15 @@ class FairplayBetAdapter(BaseSiteAdapter):
                         dom_snapshot_path=bundle.dom_snapshot_path
                     )
 
-            # B. Check for KYC Document Upload Modal ("More info needed")
+            # 3. Check for KYC Document Upload Modal ("More info needed")
             kyc_modal = page.locator(
                 'div:has-text("More info needed"):visible, '
                 'h1:has-text("More info needed"):visible, '
                 'h2:has-text("More info needed"):visible, '
                 'h3:has-text("More info needed"):visible, '
                 'div:has-text("electoral roll"):visible, '
-                'div:has-text("Proof of ID"):visible'
+                'div:has-text("Proof of ID"):visible, '
+                'div:has-text("Upload documents"):visible'
             ).first
             if kyc_modal.is_visible(timeout=300):
                 log.warning(f"⚠️ Fairplay Bet: Account created for {client.full_name} ({client.email}), but manual KYC document upload is required.")
@@ -300,15 +337,19 @@ class FairplayBetAdapter(BaseSiteAdapter):
                 kyc_bundle = capture_failure_bundle(page, client.client_id, self.site_id, "kyc_required")
                 break
 
-            # C. Check for Email Verification prompt (Client confirmed Fairplay requires email verification)
+            # 4. Check for explicit Email Verification prompt (only when specifically asking to check email for activation link)
             email_prompt = page.locator(
                 ':has-text("Verify your email"):visible, '
+                ':has-text("verify your email"):visible, '
                 ':has-text("check your email"):visible, '
+                ':has-text("Check your email"):visible, '
                 ':has-text("activation link"):visible, '
                 ':has-text("verification email"):visible, '
                 ':has-text("Please verify your email"):visible, '
-                'h1:has-text("Verify"):visible, '
-                'h2:has-text("Verify"):visible'
+                'h1:has-text("Verify your email"):visible, '
+                'h2:has-text("Verify your email"):visible, '
+                'h1:has-text("Check your email"):visible, '
+                'h2:has-text("Check your email"):visible'
             ).first
             if email_prompt.is_visible(timeout=300):
                 log.info(f"Fairplay Bet email verification prompt confirmed at {sec}s!")
@@ -316,15 +357,7 @@ class FairplayBetAdapter(BaseSiteAdapter):
                 is_confirmed = True
                 break
 
-            # D. Check if verification spinner is still active ("Please wait while we verify your details")
-            spinner = page.locator(':has-text("Please wait while we verify your details"), :has-text("verify your details")').first
-            if spinner.is_visible(timeout=300):
-                if sec % 5 == 0:
-                    log.info(f"Fairplay Bet verification spinner still processing ({sec}/{max_poll_sec}s)...")
-                page.wait_for_timeout(1000)
-                continue
-
-            # E. Check for authenticated state indicators
+            # 5. Check for authenticated state indicators
             auth_indicators = [
                 'button:has-text("Deposit")', 'a:has-text("Deposit")',
                 'button:has-text("DEPOSIT")', 'a:has-text("DEPOSIT")',
@@ -411,7 +444,15 @@ class FairplayBetAdapter(BaseSiteAdapter):
             )
 
         # Fallback failure capture
-        bundle = capture_failure_bundle(page, client.client_id, self.site_id, "verify_submission")
+        still_verifying = is_verifying_in_progress
+        try:
+            if not still_verifying:
+                still_verifying = page.locator(':has-text("Verifying"):visible, :has-text("verify your details"):visible, :has-text("Checking your details"):visible').first.is_visible(timeout=500)
+        except Exception:
+            pass
+
+        err_msg = f"Registration verification timed out: Identity check still in progress after {max_poll_sec}s (3 minutes)" if still_verifying else "Registration was not confirmed by Fairplay Bet"
+        bundle = capture_failure_bundle(page, client.client_id, self.site_id, "verification_timeout" if still_verifying else "verify_submission")
         return RegistrationResult(
             client_id=client.client_id,
             client_name=client.full_name,
@@ -420,8 +461,9 @@ class FairplayBetAdapter(BaseSiteAdapter):
             status=RegistrationStatus.FAILED,
             email=client.email,
             password=password,
-            error_summary="Registration was not confirmed by Fairplay Bet",
-            screenshot_path=bundle.screenshot_path
+            error_summary=err_msg,
+            screenshot_path=bundle.screenshot_path,
+            dom_snapshot_path=bundle.dom_snapshot_path
         )
 
     def login(

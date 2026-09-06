@@ -26,12 +26,20 @@ class StarSportsAdapter(BaseSiteAdapter):
             requires_uk_ip=False
         )
 
-    def navigate(self, page: Page) -> None:
+    def navigate(self, page: Page, promo_url: Optional[str] = None) -> bool:
         """Navigates to Star Sports, dismissing cookie overlays."""
-        log = get_logger()
-        log.info(f"Navigating to Star Sports ({self.default_promo_url})...")
-        page.goto(self.default_promo_url, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(3000)
+        target_url = promo_url or self.default_promo_url
+        log = get_logger(site_id=self.site_id, step="navigate")
+        log.info(f"Navigating to Star Sports ({target_url})...")
+        try:
+            resp = page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(2000)
+            status = resp.status if resp else 200
+            if status == 403 or self.check_geoblock(page):
+                log.warning("Geoblock / 403 detected on Star Sports")
+                return False
+        except Exception as ex:
+            log.warning(f"Navigation warning on Star Sports: {ex}")
 
         # Handle Cookie Consent
         try:
@@ -59,6 +67,8 @@ class StarSportsAdapter(BaseSiteAdapter):
                 page.wait_for_timeout(1000)
         except Exception:
             pass
+
+        return True
 
     def fill_registration(self, page: Page, client: Client, password: str) -> RegistrationResult:
         log = get_logger(client_id=client.client_id, site_id=self.site_id, step="fill_registration")
@@ -167,50 +177,63 @@ class StarSportsAdapter(BaseSiteAdapter):
                     dom_snapshot_path=bundle.dom_snapshot_path
                 )
 
-            log.info("Entering Step 2 personal details (Name, DOB, Mobile)...")
+            log.info("Entering Step 2 personal details (Title, Name, DOB, Mobile, Postcode)...")
+
+            # Title Selection (Mr / Ms choose box or select)
+            is_female = getattr(client, "resolved_title", "Mr.").startswith("M") and any(getattr(client, "resolved_title", "").startswith(p) for p in ["Mrs", "Ms", "Miss"])
+            prefix = "ms" if is_female else "mr"
+            title_text = "Ms" if is_female else "Mr"
+            title_el = page.locator(f'[data-test="{prefix}-title-choose-box"], [data-test="title-choose-box"] div:first-child, [data-test*="{prefix}-title"], div[data-component="TitleChooseBox"]:has-text("{title_text}"), label:has-text("{title_text}"), input[name="{prefix}"], [data-test="mr-title-choose-box"]').first
+            if title_el.is_visible(timeout=2000):
+                log.info(f"Selecting '{title_text}' title on Star Sports")
+                title_el.click(force=True)
+                human_pause(page, 0.2, 0.5)
+            else:
+                title_dropdown = page.locator('[data-component="Select"]:has-text("Title"), [data-test="title-select"]').first
+                if title_dropdown.is_visible(timeout=1000):
+                    title_dropdown.click(force=True)
+                    page.wait_for_timeout(300)
+                    title_opt = page.locator(f'div[role="option"]:has-text("{title_text}"), li:has-text("{title_text}"), span:has-text("{title_text}"), div[role="option"]:has-text("Mr")').first
+                    if title_opt.is_visible(timeout=1000):
+                        title_opt.click(force=True)
+
             # Star Sports strict alpha-only validation
             import re
             clean_first = re.sub(r'[^A-Za-z]', '', client.first_name) or "John"
             clean_last = re.sub(r'[^A-Za-z]', '', client.last_name) or "Smith"
-            human_type(fname_input, clean_first)
-            page.wait_for_timeout(200)
+            human_type(fname_input, clean_first, page)
+            human_pause(page, 0.2, 0.4)
 
             lname_sel = 'input[data-test="last-name-input"], input[name="lastName"], input[placeholder*="Last"]'
             lname_input = page.locator(lname_sel).first
-            human_type(lname_input, clean_last)
-            page.wait_for_timeout(200)
-
-            # Title Selection (Playbook select)
-            try:
-                title_dropdown = page.locator('[data-component="Select"]:has-text("Title"), [data-test="title-select"]').first
-                if title_dropdown.is_visible(timeout=500):
-                    title_dropdown.click(force=True)
-                    page.wait_for_timeout(300)
-                    title_opt = page.locator('div[role="option"]:has-text("Mr"), li:has-text("Mr"), span:has-text("Mr")').first
-                    if title_opt.is_visible(timeout=500):
-                        title_opt.click(force=True)
-            except Exception:
-                pass
+            human_type(lname_input, clean_last, page)
+            human_pause(page, 0.2, 0.4)
 
             # DOB Inputs
-            day_inp = page.locator('input[data-test="dob-day-input"], input[name="day"], input[placeholder="DD"]').first
-            month_inp = page.locator('input[data-test="dob-month-input"], input[name="month"], input[placeholder="MM"]').first
-            year_inp = page.locator('input[data-test="dob-year-input"], input[name="year"], input[placeholder="YYYY"]').first
+            day_inp = page.locator('input[data-test="dob-day-input"], input[data-test="day-input"], input[name="day"], input[placeholder="DD"]').first
+            month_inp = page.locator('input[data-test="dob-month-input"], input[data-test="month-input"], input[name="month"], input[placeholder="MM"]').first
+            year_inp = page.locator('input[data-test="dob-year-input"], input[data-test="year-input"], input[name="year"], input[placeholder="YYYY"]').first
 
-            human_type(day_inp, f"{int(client.dob_day):02d}")
-            human_type(month_inp, f"{int(client.dob_month):02d}")
-            human_type(year_inp, str(client.dob_year))
-            page.wait_for_timeout(300)
+            day_inp.fill(f"{int(client.dob_day):02d}")
+            month_inp.fill(f"{int(client.dob_month):02d}")
+            year_inp.fill(str(client.dob_year))
+            human_pause(page, 0.3, 0.6)
 
-            # Mobile Phone Input
-            phone_inp = page.locator('input[data-test="phone-number-input"], input[name="phoneNumber"], input[type="tel"]').first
-            clean_phone = client.phone
-            if clean_phone.startswith("+44"):
-                clean_phone = "0" + clean_phone[3:]
-            elif not clean_phone.startswith("0"):
-                clean_phone = "0" + clean_phone
-            human_type(phone_inp, clean_phone)
-            page.wait_for_timeout(300)
+            # Mobile Phone Input (strip +44 and leading 0 since UK prefix is pre-selected)
+            phone_inp = page.locator('input[data-test="phone-number-input"], input[data-test="number-input"], input[name="phoneNumber"], input[type="tel"]').first
+            cleaned_phone = client.phone
+            if cleaned_phone.startswith("+44"):
+                cleaned_phone = cleaned_phone[3:]
+            cleaned_phone = cleaned_phone.lstrip("0")
+            human_type(phone_inp, cleaned_phone, page)
+            human_pause(page, 0.3, 0.6)
+
+            # Postcode & Smart Address Lookup / Fallback
+            postcode_inp = page.locator('input[data-test="postcode-input"], input[name="postcode"], input[placeholder*="postcode" i]').first
+            if postcode_inp.is_visible(timeout=3000):
+                log.info(f"Entering postcode on Star Sports: {client.postcode}")
+                human_type(postcode_inp, client.postcode, page)
+                human_pause(page, 0.5, 1.0)
 
             # Address Selection / Manual Fallback via Shared Playbook Engine
             select_matching_playbook_address(page, client, log)
@@ -281,10 +304,17 @@ class StarSportsAdapter(BaseSiteAdapter):
 
             for sec in range(1, max_poll_sec + 1):
                 # 1. First, detect and skip Deposit drawer if open
-                handle_playbook_deposit_step(page, log if sec % 5 == 1 else None)
+                if handle_playbook_deposit_step(page, log if sec % 5 == 1 else None):
+                    log.info(f"Star Sports: Pressed SKIP on deposit step at {sec}s")
+                    page.wait_for_timeout(1000)
 
                 # 2. Detect and handle Playbook Safer Gambling / Deposit Limit onboarding
                 handle_playbook_safer_gambling_no_limit(page, log if sec % 5 == 1 else None)
+
+                # 3. Immediately check if Deposit drawer appeared right after Safer Gambling completed
+                if handle_playbook_deposit_step(page, log if sec % 5 == 1 else None):
+                    log.info(f"Star Sports: Pressed SKIP on deposit step following Safer Gambling at {sec}s")
+                    page.wait_for_timeout(1000)
 
                 # Check if Safer Gambling or Deposit onboarding form is still active in the DOM
                 is_onboarding_open = any(
@@ -294,8 +324,7 @@ class StarSportsAdapter(BaseSiteAdapter):
                         'aside[data-test="SignUpStepsContainer"]:has-text("Net deposit limits")',
                         'aside[data-test="SignUpStepsContainer"]:has-text("deposit limit")',
                         'aside[data-test="SignUpStepsContainer"]:has-text("Turn on reality check")',
-                        'aside[data-test="SignUpStepsContainer"]:has-text("DEPOSIT")',
-                        'aside[data-test="SignUpStepsContainer"]:has-text("Deposit")',
+                        'aside[data-test="SignUpStepsContainer"] [data-test="skip-button"]',
                         'div[role="dialog"]:has-text("SAFER GAMBLING")',
                         'div[class*="modal"]:has-text("SAFER GAMBLING")'
                     ]

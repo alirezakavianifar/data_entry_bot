@@ -105,6 +105,7 @@ class ExcelDataProvider(BaseDataProvider):
             card = str(get_val("card") or "").strip()
             va = str(get_val("allocated") or get_val("va") or "").strip()
             notes = str(get_val("note") or "").strip()
+            raw_title = str(get_val("title") or get_val("salutation") or "").strip() or None
 
             client_id = f"CLI_{row_idx:04d}_{''.join(c for c in full_name.lower() if c.isalnum())[:10]}"
 
@@ -114,6 +115,7 @@ class ExcelDataProvider(BaseDataProvider):
                     full_name=full_name,
                     first_name=str(first_name).strip() or full_name.split(" ")[0],
                     last_name=str(last_name).strip() or (full_name.split(" ")[-1] if " " in full_name else ""),
+                    title=raw_title,
                     dob=dob_date,
                     email=email,
                     phone=phone,

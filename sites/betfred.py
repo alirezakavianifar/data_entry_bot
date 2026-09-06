@@ -222,9 +222,10 @@ class BetfredAdapter(BaseSiteAdapter):
 
             if fn_inp.is_visible(timeout=2000):
                 log.info("Filling Step 2 Personal Details (Name, DOB)")
-                mr_pill = page.locator('button[data-actionable="RegistrationPage.PersonalSection.title.Mr"], button:has-text("Mr")').first
-                if mr_pill.is_visible(timeout=1000):
-                    mr_pill.click(force=True)
+                t_clean = getattr(client, "resolved_title_clean", "Mr")
+                title_pill = page.locator(f'button[data-actionable="RegistrationPage.PersonalSection.title.{t_clean}"], button:has-text("{t_clean}"), button[data-actionable="RegistrationPage.PersonalSection.title.Mr"], button:has-text("Mr")').first
+                if title_pill.is_visible(timeout=1500):
+                    title_pill.click(force=True)
                     human_pause(page, 0.2, 0.5)
                 
                 human_type(fn_inp, client.first_name, page)

@@ -8,7 +8,8 @@ from sites.base import (
     human_type,
     human_pause,
     human_click,
-    human_scroll
+    human_scroll,
+    human_mouse_move
 )
 from data.models import Client, RegistrationResult, RegistrationStatus
 from core.logger import get_logger, capture_failure_bundle, capture_success_screenshot, capture_login_proof_screenshot
@@ -128,16 +129,62 @@ class BetgoodwinAdapter(BaseSiteAdapter):
             }""")
 
             # 3. Fill Registration Form with realistic human pacing
-            # Title Selection
-            title_select = page.locator('vaadin-select[name="Title"], select-input.general-input--Title, general-input.general-input--Title').first
-            if title_select.is_visible(timeout=3000):
-                log.info("Selecting Title on Betgoodwin")
-                human_click(title_select, page)
-                human_pause(page, 0.4, 0.7)
-                title_item = page.locator('vaadin-select-item:has-text("Mr"), [role="option"]:has-text("Mr")').first
-                if title_item.is_visible(timeout=2000):
-                    human_click(title_item, page)
-                    human_pause(page, 0.3, 0.6)
+            # Title Selection (Mr. / Mrs. / Miss / Ms.)
+            target_title = getattr(client, "resolved_title", "Mr.")
+            log.info(f"Selecting Title '{target_title}' on Betgoodwin for client {client.full_name}")
+
+            # Human-like interaction: click visible title control
+            title_wrapper = page.locator('select-input[name="Title"], vaadin-select[name="Title"], div.Title__input, label:has-text("Title")').first
+            if title_wrapper.is_visible(timeout=2500):
+                human_click(title_wrapper, page)
+                human_pause(page, 0.3, 0.6)
+
+            # Deep shadow DOM title assignment, custom event dispatching, and overlay item selection
+            page.evaluate("""(target) => {
+                let selected = false;
+                const scan = (node) => {
+                    if (selected) return;
+                    if (node.tagName === 'VAADIN-SELECT' && node.getAttribute('name') === 'Title') {
+                        const cleanTarget = target.toLowerCase().replace('.', '');
+                        let matchedVal = null;
+                        if (node.items && Array.isArray(node.items)) {
+                            const found = node.items.find(it => {
+                                const v = (it.value || it.label || '').toLowerCase().replace('.', '');
+                                return v === cleanTarget;
+                            });
+                            if (found) matchedVal = found.value;
+                        }
+                        if (!matchedVal) matchedVal = target;
+
+                        node.value = matchedVal;
+                        node.setAttribute('has-value', '');
+                        node.dispatchEvent(new CustomEvent('change', { bubbles: true, composed: true }));
+                        node.dispatchEvent(new CustomEvent('value-changed', { detail: { value: matchedVal }, bubbles: true, composed: true }));
+
+                        // If overlay has opened or rendered items, click the matching item
+                        const overlay = node.shadowRoot ? node.shadowRoot.querySelector('vaadin-select-overlay') : null;
+                        if (overlay) {
+                            const items = overlay.querySelectorAll('vaadin-select-item');
+                            items.forEach(it => {
+                                const t = (it.innerText || it.textContent || '').trim().toLowerCase().replace('.', '');
+                                if (t === cleanTarget) {
+                                    it.click();
+                                }
+                            });
+                        }
+                        selected = true;
+                        return;
+                    }
+                    if (node.shadowRoot) Array.from(node.shadowRoot.children).forEach(scan);
+                    Array.from(node.children).forEach(scan);
+                };
+                scan(document.body);
+                return selected;
+            }""", target_title)
+
+            # Close any open dropdown overlay and pause naturally
+            page.keyboard.press("Escape")
+            human_pause(page, 0.3, 0.6)
 
             # First & Last Name
             fn_inp = page.locator('input[name="FirstnameOnDocument"], input[name*="firstName" i]').first
@@ -243,8 +290,56 @@ class BetgoodwinAdapter(BaseSiteAdapter):
             # Tick "I am 18" & Terms and Conditions Checkbox
             log.info("Ticking 'I am 18' and Terms & Conditions box...")
             terms_cb = page.locator('vaadin-checkbox:has-text("18"), vaadin-checkbox[name*="Terms" i], checkbox-input:has-text("18")').first
-            if terms_cb.is_visible(timeout=1500):
-                human_click(terms_cb, page)
+            if terms_cb.is_visible(timeout=2000):
+                try:
+                    terms_cb.scroll_into_view_if_needed(timeout=1500)
+                except Exception:
+                    pass
+
+                # CRITICAL: Target specifically the square box on the left ([part="checkbox"]),
+                # NOT the full element center which lands directly on the "Privacy Policy" link.
+                terms_box = terms_cb.locator('[part="checkbox"]').first
+                clicked_box = False
+                if terms_box.is_visible(timeout=1000):
+                    log.info("Clicking checkbox square via [part='checkbox']...")
+                    human_click(terms_box, page)
+                    clicked_box = True
+
+                if not clicked_box:
+                    box = terms_cb.bounding_box()
+                    if box:
+                        # Target left edge: square is 14px wide, centered ~10px from left and ~12px from top
+                        target_x = box['x'] + 10
+                        target_y = box['y'] + 12
+                        log.info(f"Clicking checkbox square at left offset ({target_x:.1f}, {target_y:.1f})...")
+                        human_mouse_move(page, target_x, target_y, steps=8)
+                        page.mouse.click(target_x, target_y)
+                        clicked_box = True
+                    else:
+                        terms_cb.click(position={"x": 10, "y": 12}, force=True)
+
+                human_pause(page, 0.4, 0.7)
+
+                # Verify checkbox state
+                is_checked = False
+                try:
+                    is_checked = terms_cb.evaluate("el => el.checked === true")
+                except Exception:
+                    pass
+                if not is_checked:
+                    log.info("Checkbox not yet checked after click; enforcing checked state via component event...")
+                    page.evaluate("""() => {
+                        const scan = (node) => {
+                            if (node.tagName === 'VAADIN-CHECKBOX' && (node.innerText.includes('18') || (node.parentElement && node.parentElement.tagName === 'CHECKBOX-INPUT'))) {
+                                node.checked = true;
+                                node.dispatchEvent(new CustomEvent('change', { bubbles: true }));
+                                node.dispatchEvent(new CustomEvent('checked-changed', { detail: { value: true } }));
+                            }
+                            if (node.shadowRoot) Array.from(node.shadowRoot.children).forEach(scan);
+                            Array.from(node.children).forEach(scan);
+                        };
+                        scan(document.body);
+                    }""")
             else:
                 page.evaluate("""() => {
                     const scan = (node) => {
@@ -258,7 +353,17 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                     };
                     scan(document.body);
                 }""")
-            human_pause(page, 1.0, 1.6)
+            human_pause(page, 0.6, 1.2)
+
+            # Close any popup tab in case Privacy Policy / Terms was opened
+            if len(page.context.pages) > 1:
+                for extra_page in page.context.pages:
+                    if extra_page != page:
+                        try:
+                            extra_page.close()
+                        except Exception:
+                            pass
+                page.bring_to_front()
 
             # 4. Check for Inline Field Errors / Submit Registration via 'Done' Button
             inline_error = page.locator('[class*="error"]:visible, [class*="invalid"]:visible, div:has-text("No addresses found"):visible, span:has-text("No addresses found"):visible, p:has-text("No addresses found"):visible, div:has-text("No address found"):visible').first
@@ -297,40 +402,58 @@ class BetgoodwinAdapter(BaseSiteAdapter):
                         dom_snapshot_path=bundle.dom_snapshot_path
                     )
 
+            # Scroll down smoothly towards Done button on bottom
+            log.info("Scrolling down towards Done button on bottom...")
+            human_scroll(page, distance_y=350, steps=6)
+            human_pause(page, 0.4, 0.8)
+
+            done_btn = page.locator('button:has-text("Done"), button[type="submit"]:has-text("Done")').first
+            try:
+                done_btn.scroll_into_view_if_needed(timeout=2000)
+            except Exception:
+                pass
+
             # Human review pause before pressing Done on bottom
             log.info("Simulating human review pause before pressing Done on bottom...")
             human_pause(page, 1.8, 3.2)
 
-            done_btn = page.locator('button:has-text("Done"), button[type="submit"]:has-text("Done")').first
             if done_btn.is_visible(timeout=3000):
                 log.info("Pressing Done on bottom via human click...")
-                done_btn.scroll_into_view_if_needed()
-                human_pause(page, 0.4, 0.8)
                 human_click(done_btn, page)
+            else:
+                log.warning("Done button not visible via locator; attempting page-wide Done click...")
+                page.evaluate("""() => {
+                    const buttons = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+                    const btn = buttons.find(b => ((b.innerText || b.value || '').trim().toLowerCase() === 'done'));
+                    if (btn) {
+                        btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        btn.click();
+                    }
+                }""")
 
-                # Wait dynamically for Step 1 completion or immediate failure
-                log.info("Waiting for Betgoodwin server processing / 'Please wait, loading...' to complete...")
-                loading_loc = page.locator('text="Please wait, loading...", text="Please wait", text="loading...", [class*="loading"]:visible, [class*="spinner"]:visible')
-                for _ in range(20):
-                    page.wait_for_timeout(1000)
+            # Wait dynamically for Step 1 completion or immediate failure
+            log.info("Waiting for Betgoodwin server processing / 'Please wait, loading...' to complete...")
+            loading_loc = page.locator('text="Please wait, loading...", text="Please wait", text="loading...", [class*="loading"]:visible, [class*="spinner"]:visible')
+            for _ in range(30):
+                page.wait_for_timeout(1000)
 
-                    # Fast break on immediate error
-                    err_check = page.locator('div:has-text("Something went wrong"):visible, [role="alert"]:visible, [class*="toast"]:visible').first
-                    if err_check.is_visible(timeout=200):
-                        break
+                # Fast break on immediate error
+                err_check = page.locator('div:has-text("Something went wrong"):visible, [role="alert"]:visible, [class*="toast"]:visible').first
+                if err_check.is_visible(timeout=200):
+                    break
 
-                    is_loading = False
+                is_loading = False
+                try:
+                    is_loading = loading_loc.first.is_visible(timeout=300)
+                except Exception:
+                    pass
+
+                if not is_loading:
                     try:
-                        is_loading = loading_loc.first.is_visible(timeout=300)
+                        if page.locator('text="DON\'T MISS OUT!", vaadin-checkbox:has-text("Sports"), text="Deposit", text="My Account"').first.is_visible(timeout=400):
+                            break
                     except Exception:
                         pass
-
-                    if not is_loading:
-                        try:
-                            if page.locator('text="DON\'T MISS OUT!", vaadin-checkbox:has-text("Sports"), text="Deposit", text="My Account"').first.is_visible(timeout=400):
-                                break
-                        except Exception:
-                            pass
 
             # 5. Handle Step 2 Marketing Preferences Screen (if presented)
             marketing_screen = page.locator('text="DON\'T MISS OUT!", vaadin-checkbox:has-text("Sports"), label:has-text("Sports"), text="Opting into marketing"').first

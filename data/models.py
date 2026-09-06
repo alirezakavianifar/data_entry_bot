@@ -21,6 +21,7 @@ class Client(BaseModel):
     full_name: str
     first_name: str
     last_name: str
+    title: Optional[str] = None
     dob: Optional[datetime.date] = None
     email: str
     phone: str
@@ -31,6 +32,73 @@ class Client(BaseModel):
     card_used: Optional[str] = None
     allocated_va: Optional[str] = None
     notes: Optional[str] = None
+
+    @property
+    def resolved_title(self) -> str:
+        """
+        Resolves the appropriate personal title ('Mr.', 'Mrs.', 'Miss', 'Ms.') for the client.
+        1. Uses self.title if explicitly specified.
+        2. Checks for standard title prefixes in self.full_name or self.first_name.
+        3. Uses comprehensive UK first name gender heuristic.
+        4. Defaults to 'Mr.' if undetermined.
+        """
+        # 1. Explicit title
+        if self.title and str(self.title).strip():
+            t = str(self.title).strip().lower().replace(".", "")
+            if t == "mrs":
+                return "Mrs."
+            elif t == "miss":
+                return "Miss"
+            elif t == "ms":
+                return "Ms."
+            elif t in ("mr", "mister", "dr", "master"):
+                return "Mr."
+
+        # 2. Prefix in full_name or first_name
+        name_to_check = f"{self.full_name} {self.first_name}".strip()
+        prefix_match = re.match(r"^(Mr|Mrs|Ms|Miss|Dr|Master)\b\.?", name_to_check, re.IGNORECASE)
+        if prefix_match:
+            p = prefix_match.group(1).lower()
+            if p == "mrs":
+                return "Mrs."
+            elif p == "miss":
+                return "Miss"
+            elif p == "ms":
+                return "Ms."
+            elif p in ("mr", "master", "dr"):
+                return "Mr."
+
+        # 3. UK first name gender heuristic
+        fn = re.split(r"[\s\-]", str(self.first_name).strip().lower())[0] if self.first_name else ""
+        female_names = {
+            "holly", "courtney", "laura", "leoni", "sarah", "gabriella", "hannah", "helen", "debbie",
+            "bobbie", "shannon", "emily", "sophie", "chloe", "jessica", "charlotte", "megan", "olivia",
+            "emma", "katie", "amy", "lucy", "ellie", "georgia", "rebecca", "jade", "amber", "bethany",
+            "lauren", "alice", "abigail", "eleanor", "hollie", "paige", "grace", "molly", "poppy", "daisy",
+            "rosie", "elizabeth", "freya", "ruby", "isabelle", "ella", "zoe", "sienna", "florence", "lily",
+            "scarlett", "layla", "maya", "harriet", "clara", "mary", "patricia", "jennifer", "linda",
+            "barbara", "susan", "margaret", "dorothy", "lisa", "nancy", "karen", "betty", "carol", "anna",
+            "sandra", "ashley", "donna", "ruth", "sharon", "michelle", "melissa", "amanda", "stephanie",
+            "carolyn", "christine", "marie", "janet", "catherine", "frances", "ann", "joyce", "diane",
+            "victoria", "vanessa", "kelly", "christina", "joan", "evelyn", "judith", "andrea", "cheryl",
+            "yvonne", "fiona", "gillian", "kerry", "nicola", "claire", "gemma", "tracey", "joanne",
+            "denise", "lynne", "wendy", "sally", "valerie", "maureen", "pauline", "pamela", "jean",
+            "brenda", "eileen", "marion", "doreen", "audrey", "shirley", "gwen", "dawn", "hazel",
+            "sheila", "heather", "hilary", "alison", "lesley", "morag", "lorna", "rhona", "catriona",
+            "kirsty", "isla", "anne", "teresa", "samantha", "danielle", "hayley", "kayleigh", "natasha",
+            "chelsea", "beth", "naomi", "claudia", "francesca", "zoey", "lucia", "lydia", "harriet",
+            "tash", "kay", "katy", "bethan", "rhiannon", "sian", "carys", "clara", "tina", "jo"
+        }
+        if fn in female_names:
+            return "Mrs."
+
+        # 4. Default to Mr.
+        return "Mr."
+
+    @property
+    def resolved_title_clean(self) -> str:
+        """Returns the resolved title without trailing dot, e.g. 'Mr', 'Mrs', 'Miss', 'Ms'."""
+        return self.resolved_title.rstrip(".")
 
     @field_validator("phone", mode="before")
     @classmethod

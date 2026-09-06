@@ -110,3 +110,62 @@ def test_planetsportbet_step2_delayed_duplicate_banner_is_already_registered(sam
 
     assert result.status == RegistrationStatus.ALREADY_REGISTERED
     assert "already exists" in result.error_summary.lower()
+
+
+def test_planetsportbet_registration_skips_deposit_and_succeeds(sample_client):
+    adapter = PlanetSportBetAdapter()
+    mock_page = MagicMock()
+
+    mock_input = MagicMock()
+    mock_input.is_visible.return_value = True
+
+    mock_agree_btn = MagicMock()
+    mock_agree_btn.is_visible.return_value = True
+
+    mock_auth = MagicMock()
+    mock_auth.is_visible.return_value = True
+    mock_auth.first = mock_auth
+
+    skip_clicked = False
+    def on_handle_deposit(page, log=None):
+        nonlocal skip_clicked
+        skip_clicked = True
+        return True
+
+    def locator_side_effect(selector):
+        loc = MagicMock()
+        if "agree-and-join-button" in selector:
+            loc.first = mock_agree_btn
+            return loc
+        elif "error" in selector:
+            loc.is_visible.return_value = False
+            loc.first.is_visible.return_value = False
+            return loc
+        elif "SignUpStepsContainer" in selector or "SAFER GAMBLING" in selector:
+            # Once skip is clicked, container closes
+            loc.first.is_visible.return_value = not skip_clicked
+            loc.is_visible.return_value = not skip_clicked
+            return loc
+        elif "DEPOSIT" in selector or "Deposit" in selector or "My Account" in selector:
+            loc.first = mock_auth
+            loc.is_visible.return_value = True
+            return loc
+        else:
+            loc.first = mock_input
+            loc.is_visible.return_value = True
+            return loc
+
+    mock_page.locator.side_effect = locator_side_effect
+
+    with patch("sites.planetsportbet.handle_playbook_deposit_step", side_effect=on_handle_deposit) as mock_dep, \
+         patch("sites.planetsportbet.handle_playbook_safer_gambling_no_limit", return_value=True), \
+         patch("sites.planetsportbet.select_matching_playbook_address"), \
+         patch("sites.planetsportbet.capture_login_proof_screenshot", return_value="proof.png"), \
+         patch("sites.planetsportbet.capture_success_screenshot", return_value="proof.png"):
+
+        result = adapter.fill_registration(mock_page, sample_client, "Planet2026!a")
+
+    assert result.status == RegistrationStatus.SUCCESS
+    assert skip_clicked is True
+    assert mock_dep.called
+

@@ -252,6 +252,29 @@ def human_type(locator: Locator, text: str, page: Optional[Page] = None, min_del
 
 
 
+def sanitize_playbook_address(text: str) -> str:
+    """
+    Sanitizes address lines to comply with Playbook's strict validation rule:
+    'Only letters, numbers and few special: \'#$()*+,-.:;=?@[]^_`{|}~'
+    Specifically replaces slashes ('/' and '\' common in Scottish flat numbers like 0/1) with '-',
+    replaces '&' with 'and', and strips forbidden characters.
+    """
+    if not text:
+        return ""
+    import re
+    # 1. Replace slashes commonly used in flat numbers (e.g., 0/1 -> 0-1, Flat 1/2 -> Flat 1-2)
+    cleaned = re.sub(r'[/\\|]', '-', str(text))
+    # 2. Replace ampersands with 'and'
+    cleaned = cleaned.replace('&', 'and')
+    # 3. Strip any characters not in letters, numbers, spaces, and Playbook's allowed special chars
+    allowed_pattern = r"[^a-zA-Z0-9\s'#$()*+,\-.:;=?@\[\]^_`{|}~]"
+    cleaned = re.sub(allowed_pattern, '', cleaned)
+    # 4. Normalize multiple hyphens and whitespace
+    cleaned = re.sub(r'-{2,}', '-', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned
+
+
 def select_matching_playbook_address(page: Page, client: Client, log=None) -> bool:
     """
     Specifically matches and selects the exact address for the client from Playbook's
@@ -424,6 +447,25 @@ def select_matching_playbook_address(page: Page, client: Client, log=None) -> bo
                     if log:
                         log.info(f"Filled Town/City: '{client.town_city}'")
 
+        # Guarantee all address fields strictly adhere to Playbook's allowed character set
+        for sel, field_name in [
+            ('input[data-test="address-line-1-input"], input[data-test="first-line-address-input"], input[name="address-1"], input[name="address_line_1"]', "Address Line 1"),
+            ('input[data-test="address-line-2-input"], input[name="address-2"], input[name="address_line_2"]', "Address Line 2"),
+            ('input[data-test="town-city-input"], input[name="town-city"]', "Town/City")
+        ]:
+            try:
+                inp = page.locator(sel).first
+                if inp.is_visible(timeout=500):
+                    val = inp.input_value().strip()
+                    sanitized_val = sanitize_playbook_address(val)
+                    if sanitized_val != val:
+                        if log:
+                            log.info(f"Sanitizing {field_name} for Playbook character compliance: '{val}' -> '{sanitized_val}'")
+                        inp.fill("")
+                        human_type(inp, sanitized_val, page)
+            except Exception:
+                pass
+
         return True
     except Exception as e:
         if log:
@@ -442,16 +484,23 @@ def handle_playbook_deposit_step(page: Page, log=None) -> bool:
         is_deposit_step = False
         try:
             res = page.evaluate("""() => {
+                // 1. Direct Skip control check: if skip-button exists in the DOM, deposit step is 100% active
+                const skipBtn = document.querySelector('[data-test="skip-button"], button[data-test="skip-button"], [label="SkipButton"], button[data-test*="skip" i], a[data-test*="skip" i]');
+                if (skipBtn) return true;
+
                 const container = document.querySelector('aside[data-test="SignUpStepsContainer"], [data-test="SignUpStepsContainer"], div[class*="modal"], div[class*="drawer"]');
                 if (!container) return false;
                 
+                // Exclude active Safer Gambling form if limit inputs or acknowledgment switch are still unhandled
+                const hasActiveSaferGamblingForm = !!container.querySelector('input[name*="limit" i], input[data-test*="limit" i]') ||
+                                                   (container.innerText.includes('Net deposit limits') && container.innerText.includes('happy with my current choice'));
+                if (hasActiveSaferGamblingForm) return false;
+
                 const txt = (container.innerText || container.textContent || '').toLowerCase();
-                const hasDepositHeader = txt.includes('deposit') || txt.includes('payment method') || txt.includes('add card') || txt.includes('card details');
-                const isSaferGambling = txt.includes('safer gambling') || txt.includes('net deposit limits') || txt.includes('turn on reality check') || txt.includes('rolling net') || txt.includes('happy with my current choice');
-                
+                const hasDepositHeader = txt.includes('deposit') || txt.includes('payment method') || txt.includes('add card') || txt.includes('card details') || txt.includes('choose how to pay');
                 const hasPaymentInputs = !!container.querySelector('input[placeholder*="card" i], input[name*="card" i], input[data-test*="card" i], [data-component*="Payment"], [data-component*="Deposit"]');
                 
-                return (hasDepositHeader || hasPaymentInputs) && !isSaferGambling;
+                return hasDepositHeader || hasPaymentInputs;
             }""")
             is_deposit_step = res is True
         except Exception:
@@ -463,14 +512,36 @@ def handle_playbook_deposit_step(page: Page, log=None) -> bool:
         if log:
             log.info("Playbook Deposit drawer detected — clicking 'Skip' / 'Deposit Later' to proceed to dashboard...")
 
+        # Scroll the container to the bottom so Skip button is rendered and in view
+        try:
+            page.evaluate("""() => {
+                const container = document.querySelector('aside[data-test="SignUpStepsContainer"], [data-test="SignUpStepsContainer"], div[class*="drawer"], div[class*="modal"]');
+                if (container) {
+                    container.scrollTop = container.scrollHeight;
+                    container.dispatchEvent(new Event('scroll', { bubbles: true }));
+                }
+                const skipBtn = document.querySelector('[data-test="skip-button"], button[data-test*="skip" i], [label="SkipButton"]');
+                if (skipBtn) {
+                    skipBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+                }
+            }""")
+            page.wait_for_timeout(200)
+        except Exception:
+            pass
+
         # Prioritized Skip Selectors (Buttons and Links)
         skip_selectors = [
-            'aside[data-test="SignUpStepsContainer"] button[data-test*="skip" i]',
-            'aside[data-test="SignUpStepsContainer"] a[data-test*="skip" i]',
-            'aside[data-test="SignUpStepsContainer"] button:has-text("Skip")',
+            'aside[data-test="SignUpStepsContainer"] [data-test="skip-button"]',
+            'aside[data-test="SignUpStepsContainer"] button[data-test="skip-button"]',
+            'aside[data-test="SignUpStepsContainer"] [data-test*="skip" i]',
+            'aside[data-test="SignUpStepsContainer"] [label="SkipButton"]',
+            'aside[data-test="SignUpStepsContainer"] [label="SkipButtonContainer"] button',
             'aside[data-test="SignUpStepsContainer"] button:has-text("SKIP")',
-            'aside[data-test="SignUpStepsContainer"] a:has-text("Skip")',
+            'aside[data-test="SignUpStepsContainer"] button:has-text("Skip")',
             'aside[data-test="SignUpStepsContainer"] a:has-text("SKIP")',
+            'aside[data-test="SignUpStepsContainer"] a:has-text("Skip")',
+            'aside[data-test="SignUpStepsContainer"] button:has-text("Skip for now")',
+            'aside[data-test="SignUpStepsContainer"] a:has-text("Skip for now")',
             'aside[data-test="SignUpStepsContainer"] button:has-text("Deposit Later")',
             'aside[data-test="SignUpStepsContainer"] button:has-text("Deposit later")',
             'aside[data-test="SignUpStepsContainer"] a:has-text("Deposit Later")',
@@ -479,18 +550,22 @@ def handle_playbook_deposit_step(page: Page, log=None) -> bool:
             'aside[data-test="SignUpStepsContainer"] button:has-text("Maybe later")',
             'aside[data-test="SignUpStepsContainer"] a:has-text("Maybe Later")',
             'aside[data-test="SignUpStepsContainer"] a:has-text("Maybe later")',
-            'aside[data-test="SignUpStepsContainer"] button:has-text("Skip for now")',
-            'aside[data-test="SignUpStepsContainer"] a:has-text("Skip for now")',
             'aside[data-test="SignUpStepsContainer"] button:has-text("I\'ll do this later")',
             'aside[data-test="SignUpStepsContainer"] a:has-text("I\'ll do this later")',
             'aside[data-test="SignUpStepsContainer"] button:has-text("Not now")',
             'aside[data-test="SignUpStepsContainer"] a:has-text("Not now")',
+            '[data-test="skip-button"]',
+            'button[data-test="skip-button"]',
+            '[label="SkipButton"]',
+            '[label="SkipButtonContainer"] button',
             'button[data-test*="skip" i]',
             'a[data-test*="skip" i]',
-            'button:has-text("Skip")',
             'button:has-text("SKIP")',
-            'a:has-text("Skip")',
+            'button:has-text("Skip")',
             'a:has-text("SKIP")',
+            'a:has-text("Skip")',
+            'button:has-text("Skip for now")',
+            'a:has-text("Skip for now")',
             'button:has-text("Deposit Later")',
             'button:has-text("Deposit later")',
             'a:has-text("Deposit Later")',
@@ -499,8 +574,6 @@ def handle_playbook_deposit_step(page: Page, log=None) -> bool:
             'button:has-text("Maybe later")',
             'a:has-text("Maybe Later")',
             'a:has-text("Maybe later")',
-            'button:has-text("Skip for now")',
-            'a:has-text("Skip for now")',
             'button:has-text("I\'ll do this later")',
             'a:has-text("I\'ll do this later")',
             'button:has-text("Not now")',
@@ -524,7 +597,8 @@ def handle_playbook_deposit_step(page: Page, log=None) -> bool:
                     if log:
                         log.info(f"Clicking Skip Deposit control: {s_sel}")
                     el.scroll_into_view_if_needed()
-                    el.click(force=True, timeout=1000)
+                    page.wait_for_timeout(200)
+                    el.click(force=True, timeout=1500)
                     page.wait_for_timeout(500)
                     clicked = True
                     break
@@ -538,19 +612,23 @@ def handle_playbook_deposit_step(page: Page, log=None) -> bool:
                     const container = document.querySelector('aside[data-test="SignUpStepsContainer"], [data-test="SignUpStepsContainer"], body');
                     if (!container) return false;
                     
-                    const els = Array.from(container.querySelectorAll('button, a, span, div'));
-                    const skipKeywords = ['skip', 'deposit later', 'maybe later', 'skip for now', 'not now', "i'll do this later", 'close'];
-                    
-                    const skipTarget = els.find(el => {
-                        const t = (el.innerText || el.textContent || '').trim().toLowerCase();
-                        const dt = (el.getAttribute('data-test') || '').toLowerCase();
-                        const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-                        // STRICT EXCLUSION: Never match Deposit button
-                        if (t === 'deposit' || t.startsWith('deposit £') || dt === 'deposit-button') return false;
-                        return skipKeywords.some(k => t === k || t.startsWith(k)) || dt.includes('skip') || dt.includes('close') || aria.includes('close');
-                    });
+                    let skipTarget = container.querySelector('[data-test="skip-button"], [label="SkipButton"], button[data-test*="skip" i], a[data-test*="skip" i]');
+                    if (!skipTarget) {
+                        const els = Array.from(container.querySelectorAll('button, a, span, div[role="button"]'));
+                        const skipKeywords = ['skip', 'deposit later', 'maybe later', 'skip for now', 'not now', "i'll do this later", 'close'];
+                        
+                        skipTarget = els.find(el => {
+                            const t = (el.innerText || el.textContent || '').trim().toLowerCase();
+                            const dt = (el.getAttribute('data-test') || '').toLowerCase();
+                            const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+                            // STRICT EXCLUSION: Never match Deposit button
+                            if (t === 'deposit' || t.startsWith('deposit £') || dt === 'deposit-button') return false;
+                            return skipKeywords.some(k => t === k || t.startsWith(k)) || dt.includes('skip') || dt.includes('close') || aria.includes('close');
+                        });
+                    }
                     
                     if (skipTarget) {
+                        skipTarget.scrollIntoView({ behavior: 'instant', block: 'center' });
                         for (const key in skipTarget) {
                             if (key.startsWith('__reactProps') || key.startsWith('__reactEvents') || key.startsWith('__reactFiber')) {
                                 const props = skipTarget[key];
@@ -593,12 +671,19 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
         # Check if the modal is currently on the Deposit step rather than Safer Gambling
         try:
             res = page.evaluate("""() => {
+                const skipBtn = document.querySelector('[data-test="skip-button"], button[data-test*="skip" i], [label="SkipButton"]');
+                if (skipBtn) return true;
+
                 const container = document.querySelector('aside[data-test="SignUpStepsContainer"], [data-test="SignUpStepsContainer"]');
                 if (!container) return false;
+
+                const hasActiveSaferGamblingForm = !!container.querySelector('input[name*="limit" i], input[data-test*="limit" i]') ||
+                                                   (container.innerText.includes('Net deposit limits') && container.innerText.includes('happy with my current choice'));
+                if (hasActiveSaferGamblingForm) return false;
+
                 const txt = (container.innerText || container.textContent || '').toLowerCase();
                 const hasDeposit = txt.includes('deposit') || txt.includes('payment method') || txt.includes('add card');
-                const isSaferGambling = txt.includes('safer gambling') || txt.includes('net deposit limits') || txt.includes('turn on reality check') || txt.includes('rolling net') || txt.includes('happy with my current choice');
-                return hasDeposit && !isSaferGambling;
+                return hasDeposit;
             }""")
             if res is True:
                 return handle_playbook_deposit_step(page, log)
@@ -618,8 +703,6 @@ def handle_playbook_safer_gambling_no_limit(page: Page, log=None) -> bool:
             'aside[data-test="SignUpStepsContainer"] h4:has-text("SAFER GAMBLING")',
             'aside[data-test="SignUpStepsContainer"] [data-test*="safer-gambling"]',
             'aside[data-test="SignUpStepsContainer"] [data-component*="SaferGambling"]',
-            'aside[data-test="SignUpStepsContainer"] [data-component="Toggle"]',
-            'aside[data-test="SignUpStepsContainer"] [class*="ToggleWrapper"]',
             'aside[data-test="SignUpStepsContainer"] button[data-test="next-button"]',
             'div[role="dialog"]:has-text("SAFER GAMBLING")',
             'div[role="dialog"]:has-text("deposit limit")',

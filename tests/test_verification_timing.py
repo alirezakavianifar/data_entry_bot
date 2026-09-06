@@ -80,6 +80,132 @@ def test_fairplay_email_verification_status(mock_client):
     assert adapter.site_id == "fairplaybet"
 
 
+def test_fairplay_verifying_spinner_does_not_exit_early(mock_client):
+    """
+    Verifies that when Fairplay Bet displays 'Verifying' / 'Please wait while we verify your details',
+    it does NOT treat it as an email verification prompt and does NOT mark it as SUCCESS immediately.
+    It must wait and return the actual outcome (e.g. failure when verification fails).
+    """
+    adapter = FairplayBetAdapter()
+    page = MagicMock()
+    page.url = "https://fairplaybet.co.uk/"
+    page.is_closed.return_value = False
+
+    # Standard visible locator mock for form fields
+    generic_visible = MagicMock()
+    generic_visible.first = generic_visible
+    generic_visible.is_visible.return_value = True
+    generic_visible.is_checked.return_value = True
+    generic_visible.count.return_value = 1
+
+    # Call counter to simulate state transition:
+    # First 2 checks: Verifying indicator is visible
+    # Next: Verification failed modal is visible
+    poll_calls = 0
+
+    verifying_mock = MagicMock()
+    verifying_mock.first = verifying_mock
+    verifying_mock.inner_text.return_value = "Verifying your details"
+
+    failed_mock = MagicMock()
+    failed_mock.first = failed_mock
+    failed_mock.inner_text.return_value = "Verification failed - Unable to verify your details"
+
+    not_visible = MagicMock()
+    not_visible.first = not_visible
+    not_visible.is_visible.return_value = False
+
+    def locator_side_effect(selector):
+        nonlocal poll_calls
+        if any(k in selector for k in ("Please wait while we verify", "Verifying", "verifying")):
+            if poll_calls < 2:
+                verifying_mock.is_visible.return_value = True
+                return verifying_mock
+            else:
+                verifying_mock.is_visible.return_value = False
+                return not_visible
+        elif "Verification failed" in selector or "Unable to verify" in selector or "error" in selector.lower():
+            if poll_calls >= 2:
+                failed_mock.is_visible.return_value = True
+                return failed_mock
+            else:
+                failed_mock.is_visible.return_value = False
+                return not_visible
+        elif any(k in selector for k in ("activation link", "check your email", "Verify your email", "More info needed", "captcha", "recaptcha", "hcaptcha")):
+            return not_visible
+        elif any(k in selector for k in ("Deposit", "My Account", "Logout")):
+            return not_visible
+        return generic_visible
+
+    def wait_side_effect(ms):
+        nonlocal poll_calls
+        poll_calls += 1
+
+    page.locator.side_effect = locator_side_effect
+    page.wait_for_timeout.side_effect = wait_side_effect
+
+    with patch("sites.fairplaybet.capture_failure_bundle") as mock_bundle:
+        bundle_mock = MagicMock()
+        bundle_mock.screenshot_path = "fail.png"
+        bundle_mock.dom_snapshot_path = "fail.html"
+        mock_bundle.return_value = bundle_mock
+
+        res = adapter.fill_registration(page, mock_client, "Password123!")
+
+    # Must NOT have exited on iteration 0 as SUCCESS
+    assert res.status == RegistrationStatus.FAILED
+    assert "Unable to verify" in res.error_summary or "Verification failed" in res.error_summary
+    assert poll_calls >= 2
+
+
+def test_fairplay_verifying_timeout_returns_failed(mock_client):
+    """
+    Verifies that if Fairplay Bet remains stuck in the 'Verifying...' state through
+    the full polling window, it returns FAILED (never premature SUCCESS).
+    """
+    adapter = FairplayBetAdapter()
+    page = MagicMock()
+    page.url = "https://fairplaybet.co.uk/"
+    page.is_closed.return_value = False
+
+    generic_visible = MagicMock()
+    generic_visible.first = generic_visible
+    generic_visible.is_visible.return_value = True
+    generic_visible.is_checked.return_value = True
+    generic_visible.count.return_value = 1
+
+    verifying_mock = MagicMock()
+    verifying_mock.first = verifying_mock
+    verifying_mock.is_visible.return_value = True
+    verifying_mock.inner_text.return_value = "Verifying your details"
+
+    not_visible = MagicMock()
+    not_visible.first = not_visible
+    not_visible.is_visible.return_value = False
+
+    def locator_side_effect(selector):
+        if any(k in selector for k in ("Please wait while we verify", "Verifying", "verifying")):
+            return verifying_mock
+        elif any(k in selector for k in ("activation link", "check your email", "Verify your email", "More info needed", "captcha", "recaptcha", "hcaptcha", "already registered", "Error", "Unable to verify", "Verification failed")):
+            return not_visible
+        elif any(k in selector for k in ("Deposit", "My Account", "Logout")):
+            return not_visible
+        return generic_visible
+
+    page.locator.side_effect = locator_side_effect
+
+    with patch("sites.fairplaybet.capture_failure_bundle") as mock_bundle:
+        bundle_mock = MagicMock()
+        bundle_mock.screenshot_path = "timeout.png"
+        bundle_mock.dom_snapshot_path = "timeout.html"
+        mock_bundle.return_value = bundle_mock
+
+        res = adapter.fill_registration(page, mock_client, "Password123!")
+
+    assert res.status == RegistrationStatus.FAILED
+    assert "timed out" in res.error_summary.lower()
+
+
 def test_quinnbet_adapter_instantiation():
     adapter = QuinnbetAdapter()
     assert adapter.site_id == "quinnbet"

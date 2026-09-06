@@ -21,7 +21,8 @@ Includes both a **Modern Desktop GUI Application** and a **Command-Line Interfac
   - Handles internal scroll containers by actively scrolling explanatory text boxes to the bottom (`scrollTop = scrollHeight`) to unlock below-the-fold controls.
   - Supports automatic deposit limit input population (£100–£500) and preset chips, or explicit selection of *"No I don't want to set a deposit limit"*.
   - Switches acknowledgment toggles ON (`aria-checked="true"`), strips disabled attributes, and drives progression CTAs (`Next`, `I'm Happy with this`, `Accept`, `Save & Continue`, `Done`) through multi-vector Playwright + synthetic DOM + React Fiber execution.
-  - **Smart Postcode Lookup & Address Matching (`select_matching_playbook_address`):** Tokenizes client address lines and uses confidence scoring (house numbers +50, street tokens +15 each, mismatch penalties -40) to select exact addresses rather than blind first-item clicks, with automatic fallback to manual address typing.
+  - **Smart Postcode Lookup & Address Matching (`select_matching_playbook_address` / `sanitize_playbook_address`):** Tokenizes client address lines and uses confidence scoring (house numbers +50, street tokens +15 each, mismatch penalties -40) to select exact addresses rather than blind first-item clicks, with automatic fallback to manual address typing. Automatically sanitizes address lines against strict Playbook platform validation restrictions (e.g. normalizing Scottish flat slashes like `0/1` into `0-1`, converting ampersands to `and`, and stripping disallowed symbols).
+  - **Deposit Step SKIP Automation (`handle_playbook_deposit_step`):** Detects the final post-registration Deposit / Payment step (`DepositSignupLayout`) on **Planet Sport Bet** (`https://planetsportbet.com/`), **Star Sports**, **BresBet**, and **Bet St George**. Automatically scrolls internal drawer containers into view and actively presses the **"SKIP"** button (`button[data-test="skip-button"]`, `button:has-text("SKIP")`, `button:has-text("Skip")`) when choosing whether to deposit, closing the aside drawer cleanly and transitioning directly into the verified user session.
   - Prevents premature browser teardown and incomplete signups by actively polling until the onboarding container is fully dismissed and authentic session credentials/balances are established.
 - **🛡️ Anti-Bot Stealth Shield & Device Fingerprint Masking:**
   - Complete elimination of `navigator.webdriver` and CDP automation flags.
@@ -38,11 +39,16 @@ Includes both a **Modern Desktop GUI Application** and a **Command-Line Interfac
   - Dynamic adaptive monitoring (30s baseline settle, extending up to 90s while the auto-verification KYC spinner is active).
   - Automatically detects in-platform verification completion toasts, dismisses net deposit limit modals, and recognizes manual document upload requests while safely preserving valid credentials.
 - **🏇 BetGoodwin Human-Paced Registration Engine:**
+  - **Dynamic Title Selection (`Mr.`, `Mrs.`, `Miss`, `Ms.`):** Resolves the client's personal title from explicit sheet data, name prefixes, or UK name heuristics, and accurately selects the title across EveryMatrix multi-tiered Polymer shadow DOM (`vaadin-select[name="Title"]`), dispatching authentic component events and overlay clicks.
   - Enforces password lengths strictly between 8 and 14 characters meeting BetGoodwin security policies.
   - Simulates realistic human typing cadence with inter-key digraph jitter across all fields (Name, Email, Mobile, Username, Password, Postcode, Address).
   - Integrates natural reading/thinking pauses (0.3s–1.8s) between form controls.
   - Ticks the 18+ and Terms & Conditions checkbox with realistic mouse targeting.
   - Executes a human review pause before pressing the bottom Done button, preventing anti-bot velocity triggers.
+- **🎯 Fairplay Bet Multi-Step Registration & Electronic Verification:**
+  - Robust 3-step registration drawer handling email credentials, password generation, and personal details.
+  - Active verification polling (up to 3 minutes / 180s) specifically monitoring the `"Verifying..."` electronic identity check state, guaranteeing the bot waits for the verification process to finish rather than exiting prematurely.
+  - Accurately classifies final outcomes: session authentication (`SUCCESS`), explicit email activation requests (`SUCCESS` with email reminder), manual KYC document verification (`MANUAL_REVIEW`), or electronic verification rejection (`FAILED`).
 - **🌐 Residential & Mobile Proxy Integration:**
   - Built-in support for UK Residential and 4G/5G Mobile Proxies (`PROXY_SERVER`, `PROXY_USERNAME`, `PROXY_PASSWORD`) ensuring requests originate from residential UK ASNs.
 - **Human Pacing & Randomized Delay Engine (15–20s):**

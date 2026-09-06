@@ -190,8 +190,12 @@ class PlanetSportBetAdapter(BaseSiteAdapter):
                 )
 
             # Select Title (Mr / Ms)
-            title_el = page.locator('[data-test="mr-title-choose-box"], [data-test="title-choose-box"] div:first-child, label:has-text("Mr")').first
+            is_female = getattr(client, "resolved_title", "Mr.").startswith("M") and any(getattr(client, "resolved_title", "").startswith(p) for p in ["Mrs", "Ms", "Miss"])
+            prefix = "ms" if is_female else "mr"
+            title_text = "Ms" if is_female else "Mr"
+            title_el = page.locator(f'[data-test="{prefix}-title-choose-box"], label:has-text("{title_text}"), [data-test="mr-title-choose-box"], [data-test="title-choose-box"] div:first-child, label:has-text("Mr")').first
             if title_el.is_visible(timeout=2000):
+                log.info(f"Selecting '{title_text}' title on Planet Sport Bet")
                 title_el.click(force=True)
                 human_pause(page, 0.2, 0.5)
 
@@ -278,10 +282,17 @@ class PlanetSportBetAdapter(BaseSiteAdapter):
 
             for sec in range(1, max_poll_sec + 1):
                 # 1. First, detect and skip Deposit drawer if open
-                handle_playbook_deposit_step(page, log if sec % 5 == 1 else None)
+                if handle_playbook_deposit_step(page, log if sec % 5 == 1 else None):
+                    log.info(f"Planet Sport Bet: Pressed SKIP on deposit step at {sec}s")
+                    page.wait_for_timeout(1000)
 
                 # 2. Detect and handle Playbook Safer Gambling / Deposit Limit onboarding
                 handle_playbook_safer_gambling_no_limit(page, log if sec % 5 == 1 else None)
+
+                # 3. Immediately check if Deposit drawer appeared right after Safer Gambling completed
+                if handle_playbook_deposit_step(page, log if sec % 5 == 1 else None):
+                    log.info(f"Planet Sport Bet: Pressed SKIP on deposit step following Safer Gambling at {sec}s")
+                    page.wait_for_timeout(1000)
 
                 # Check if Safer Gambling or Deposit onboarding form is still active in the DOM
                 is_onboarding_open = any(
@@ -291,8 +302,7 @@ class PlanetSportBetAdapter(BaseSiteAdapter):
                         'aside[data-test="SignUpStepsContainer"]:has-text("Net deposit limits")',
                         'aside[data-test="SignUpStepsContainer"]:has-text("deposit limit")',
                         'aside[data-test="SignUpStepsContainer"]:has-text("Turn on reality check")',
-                        'aside[data-test="SignUpStepsContainer"]:has-text("DEPOSIT")',
-                        'aside[data-test="SignUpStepsContainer"]:has-text("Deposit")',
+                        'aside[data-test="SignUpStepsContainer"] [data-test="skip-button"]',
                         'div[role="dialog"]:has-text("SAFER GAMBLING")',
                         'div[class*="modal"]:has-text("SAFER GAMBLING")'
                     ]

@@ -86,3 +86,17 @@ def test_starsports_step1_already_exists_mock():
     assert res.status == RegistrationStatus.ALREADY_REGISTERED
     assert "Already registered" in res.error_summary
     assert "This e-mail already exists." in res.error_summary
+
+
+def test_starsports_navigate_signature():
+    adapter = StarSportsAdapter()
+    page = MagicMock()
+    page.goto.return_value = MagicMock(status=200)
+    page.inner_text.return_value = "Normal page content"
+
+    # Test 1 argument (page only)
+    assert adapter.navigate(page) is True
+
+    # Test 2 arguments (page, promo_url) - exactly as called by BaseSiteAdapter.execute
+    assert adapter.navigate(page, "https://starsports.bet/?promo=welcome") is True
+
