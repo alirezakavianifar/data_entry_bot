@@ -221,13 +221,13 @@ def human_scroll(page: Page, distance_y: int = 300, steps: int = 5):
 def human_type(locator: Locator, text: str, page: Optional[Page] = None, min_delay_ms: int = 25, max_delay_ms: int = 75):
     """Types text character-by-character into an input element with realistic human digraph rhythms."""
     try:
-        try:
-            locator.scroll_into_view_if_needed(timeout=1500)
-        except Exception:
-            pass
         if page:
             human_click(locator, page)
         else:
+            try:
+                locator.scroll_into_view_if_needed(timeout=1500)
+            except Exception:
+                pass
             locator.click(force=True)
         locator.fill("")
         

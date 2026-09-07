@@ -384,6 +384,7 @@ class BetTOMAdapter(BaseSiteAdapter):
                     };
                     scanButtons(document.body);
                 }""")
+            human_pause(page, 1.2, 2.2)
 
             # 8. Wait for results of verification post-submission
             log.info("Waiting for post-submission verification results on BetTOM...")
@@ -492,6 +493,9 @@ class BetTOMAdapter(BaseSiteAdapter):
 
         log.info("Waiting for BetTOM post-submission page state change and verification completion...")
 
+        # Initial pause to allow submission request to register on BetTOM/EveryMatrix backend
+        time.sleep(1.5)
+
         while time.time() - start_time < max_wait_seconds:
             elapsed = time.time() - start_time
 
@@ -507,20 +511,42 @@ class BetTOMAdapter(BaseSiteAdapter):
 
             lower_body = body_text.lower()
 
+            # 0. Check if BetTOM is actively loading or verifying details
+            is_loading = False
+            try:
+                loading_el = page.locator(
+                    'text="Please wait, loading...", text="Please wait", text="loading...", '
+                    'text="Verifying your details", text="Verifying...", text="Checking your details", '
+                    '.RegisterWrapper:has-text("Please wait"), general-registration:has-text("Please wait"), '
+                    '[class*="loading"]:visible, [class*="spinner"]:visible'
+                ).first
+                if loading_el.is_visible(timeout=200):
+                    is_loading = True
+            except Exception:
+                pass
+
+            if is_loading:
+                if int(elapsed) % 5 == 0:
+                    log.info(f"BetTOM server is processing registration / verifying details... ({elapsed:.0f}s elapsed)")
+                page.wait_for_timeout(int(poll_interval * 1000))
+                continue
+
             # 1. Check for Duplicate / Already Registered State Change
             if any(kw in lower_body for kw in [
                 "already registered", "already exists", "account exists",
                 "email already in use", "username already taken", "duplicate account",
-                "an account with these details already exists"
+                "an account with these details already exists", "looks like you already have an account"
             ]):
                 log.warning(f"Page state changed: BetTOM reported client {client.full_name} is ALREADY REGISTERED ({elapsed:.1f}s)")
                 return RegistrationStatus.ALREADY_REGISTERED, "Account details already registered", None
 
             # 2. Check for Explicit Validation / Submission Error Banner
-            error_loc = page.locator('.error-message, .general-input__error, [class*="error"]:visible, [class*="alert-danger"]:visible').first
-            if error_loc.is_visible(timeout=100):
+            error_loc = page.locator('.error-message:visible, .general-input__error:visible, [class*="error"]:visible, [class*="alert-danger"]:visible, div:has-text("Something went wrong"):visible').first
+            if error_loc.is_visible(timeout=150):
                 err_text = error_loc.inner_text().strip()
-                if err_text and not any(ign in err_text.lower() for ign in ["cookie", "script"]):
+                if err_text and not any(ign in err_text.lower() for ign in ["cookie", "script", "optin"]):
+                    if "something went wrong" in err_text.lower():
+                        return RegistrationStatus.FAILED, "Something went wrong during registration", None
                     log.warning(f"Page state changed: BetTOM displayed submission error: '{err_text}' ({elapsed:.1f}s)")
                     return RegistrationStatus.FAILED, f"Validation error: {err_text}", None
 
@@ -528,48 +554,74 @@ class BetTOMAdapter(BaseSiteAdapter):
             if any(kw in lower_body for kw in [
                 "suspended pending verification", "identity verification", "verify your identity",
                 "upload documents", "pending verification", "further verification required",
-                "account under review", "kyc verification", "identity check"
+                "account under review", "kyc verification", "identity check", "unable to verify"
             ]):
                 log.info(f"Page state changed: BetTOM requested KYC / Identity Verification ({elapsed:.1f}s)")
                 return RegistrationStatus.MANUAL_REVIEW, "KYC / Account verification required", None
 
-            # 4. Check for Deposit Screen / Safer Gambling / Limit Setting State Change
-            deposit_or_limits = any(
-                page.locator(sel).first.is_visible(timeout=200)
-                for sel in [
-                    'button:has-text("Deposit")', 'a:has-text("Deposit")',
-                    'div:has-text("Deposit Limit")', 'div:has-text("Set Limits")',
-                    'div:has-text("Safer Gambling")', 'div:has-text("Welcome to BetTOM")',
-                    'div:has-text("Account Created")', 'div:has-text("Registration Complete")',
-                    'div[class*="deposit"]', 'div[class*="limits"]', 'div[class*="success"]'
-                ]
-            )
-            modal_form_active = page.locator('#RegistrationFormStep1, input[name="FirstnameOnDocument"]').first.is_visible(timeout=100)
-            if deposit_or_limits and not modal_form_active:
-                log.info(f"Page state changed: BetTOM reached Deposit / Onboarding screen ({elapsed:.1f}s)")
-                return RegistrationStatus.SUCCESS, "Registration completed (Deposit / Limits screen reached)", None
+            # 4. Handle Step 2 Marketing Preferences Screen (if presented)
+            marketing_screen = page.locator('text="DON\'T MISS OUT!", vaadin-checkbox:has-text("Sports"), label:has-text("Sports"), text="Opting into marketing"').first
+            if marketing_screen.is_visible(timeout=200):
+                log.info(f"BetTOM: Handling Step 2 Marketing Preferences ({elapsed:.1f}s)...")
+                sports_cb = page.locator('vaadin-checkbox:has-text("Sports"), label:has-text("Sports")').first
+                if sports_cb.is_visible(timeout=1000):
+                    human_click(sports_cb, page)
+                    human_pause(page, 0.4, 0.7)
+                done2_btn = page.locator('button:has-text("Done"):visible, button.registration__button--next:visible').last
+                if done2_btn.is_visible(timeout=1000):
+                    human_click(done2_btn, page)
+                    page.wait_for_timeout(2000)
+                    continue
 
-            # 5. Check if Registration Modal has Closed and User Session is Active
-            modal_visible = page.locator('.LoginModalWindow').first.is_visible(timeout=100)
-            has_auth = any(
-                page.locator(sel).first.is_visible(timeout=200)
-                for sel in [
-                    '.ItemBalance', '.ItemMyAccount', '.AuthUser',
-                    'button:has-text("Deposit")', 'a:has-text("My Account")',
-                    'div.UserProfile', 'div.UserHeader'
-                ]
-            )
-            if not modal_visible and has_auth:
-                log.info(f"Page state changed: Registration modal closed and user session active ({elapsed:.1f}s)")
-                return RegistrationStatus.SUCCESS, "Registration completed (Session active)", None
+            # 5. Check for Deposit Screen / Safer Gambling / Limit Setting State Change INSIDE the Modal
+            modal_container = page.locator('.LoginModalContainer, .LoginModalContent, .RegisterWrapper').first
+            modal_open = False
+            try:
+                modal_open = modal_container.is_visible(timeout=200)
+            except Exception:
+                pass
 
-            # 6. Check if URL changed from initial landing URL
-            if page.url != initial_url:
-                log.info(f"Page state changed: URL navigated from '{initial_url}' to '{page.url}' ({elapsed:.1f}s)")
-                return RegistrationStatus.SUCCESS, f"Registration completed (Navigated to {page.url})", None
+            if modal_open:
+                # When modal is still open, check if it transitioned from registration form into Deposit / Limits / Welcome
+                onboarding_inside_modal = any(
+                    modal_container.locator(sel).first.is_visible(timeout=150)
+                    for sel in [
+                        'text="Deposit Limit"', 'text="Set Limits"', 'text="Safer Gambling"',
+                        'text="Welcome to BetTOM"', 'text="Account Created"',
+                        'text="Registration Complete"', 'text="Registration Successful"',
+                        'button:has-text("Deposit")', 'a:has-text("Deposit")'
+                    ]
+                )
+                form_inputs_present = False
+                try:
+                    form_inputs_present = modal_container.locator('input[name="Email"], input[name="Password"], vaadin-select[name="Title"]').first.is_visible(timeout=150)
+                except Exception:
+                    pass
 
-            # 7. Check if Registration Modal has completely closed (form dismissed)
-            if not modal_visible:
+                if onboarding_inside_modal and not form_inputs_present:
+                    log.info(f"Page state changed: BetTOM reached Deposit / Onboarding screen inside modal ({elapsed:.1f}s)")
+                    return RegistrationStatus.SUCCESS, "Registration completed (Deposit / Limits screen reached)", None
+
+            # 6. Check if Registration Modal has Closed and User Session is Active
+            if not modal_open:
+                has_auth = any(
+                    page.locator(sel).first.is_visible(timeout=200)
+                    for sel in [
+                        '.ItemBalance', '.ItemMyAccount', '.AuthUser',
+                        'button:has-text("Deposit")', 'a:has-text("My Account")',
+                        'div.UserProfile', 'div.UserHeader'
+                    ]
+                )
+                if has_auth:
+                    log.info(f"Page state changed: Registration modal closed and user session active ({elapsed:.1f}s)")
+                    return RegistrationStatus.SUCCESS, "Registration completed (Session active)", None
+
+                # 7. Check if URL changed from initial landing URL
+                if page.url != initial_url and "login" not in page.url.lower():
+                    log.info(f"Page state changed: URL navigated from '{initial_url}' to '{page.url}' ({elapsed:.1f}s)")
+                    return RegistrationStatus.SUCCESS, f"Registration completed (Navigated to {page.url})", None
+
+                # 8. Check if Registration Modal has completely closed (form dismissed)
                 page.wait_for_timeout(2000)
                 log.info(f"Page state changed: Registration modal dismissed completely ({elapsed:.1f}s)")
                 return RegistrationStatus.SUCCESS, "Registration modal completed and closed", None

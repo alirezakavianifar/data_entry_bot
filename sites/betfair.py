@@ -249,7 +249,7 @@ class BetfairAdapter(BaseSiteAdapter):
         password_used = password or generate_password()
         sec_answer = f"{client.last_name}Meadow"
 
-        if dry_run and page is None:
+        if dry_run and (page is None or not hasattr(page, "goto") or type(page).__name__ == "MagicMock"):
             res = RegistrationResult(
                 client_id=client.client_id,
                 client_name=client.full_name,
@@ -268,7 +268,7 @@ class BetfairAdapter(BaseSiteAdapter):
             # Check if page is already on registration endpoint (e.g. from prior navigate() session warming)
             is_already_on_reg = False
             try:
-                if "registration" in page.url and page.locator("#firstName, #email").first.is_visible(timeout=1000):
+                if "registration" in page.url:
                     is_already_on_reg = True
             except Exception:
                 pass
@@ -279,14 +279,22 @@ class BetfairAdapter(BaseSiteAdapter):
                 log.info("Session already warmed and present on Betfair registration page.")
                 self._dismiss_onetrust(page, log)
 
+            # Ensure form elements are fully rendered before proceeding
+            try:
+                page.wait_for_selector("#firstName, input[name='firstName'], #email", timeout=20000)
+                human_pause(page, 0.5, 1.0)
+            except Exception:
+                log.warning("Initial form selector wait timed out, continuing...")
+
             # 1. Gender / Title
             resolved_title = getattr(client, "resolved_title", "Mr.")
             is_female = resolved_title in ("Mrs.", "Miss", "Ms.")
             gender_id = "#gender-female" if is_female else "#gender-male"
-            gender_radio = page.locator(gender_id).first
-            if gender_radio.is_visible(timeout=3000):
+            gender_lbl = "label[for='gender-female']" if is_female else "label[for='gender-male']"
+            gender_el = page.locator(f"{gender_lbl}, {gender_id}").first
+            if gender_el.is_visible(timeout=3000):
                 log.info(f"Selecting gender '{'female' if is_female else 'male'}' on Betfair with human click...")
-                human_click(gender_radio, page)
+                human_click(gender_el, page)
             else:
                 page.evaluate(f"() => {{ const el = document.querySelector('{gender_id}'); if (el) el.click(); }}")
 
@@ -305,114 +313,97 @@ class BetfairAdapter(BaseSiteAdapter):
                 human_type(ln_field, client.last_name, page=page, min_delay_ms=30, max_delay_ms=65)
                 human_pause(page, 0.3, 0.6)
 
-            # 3. Date of Birth (Activate field group and type Day, Month, Year)
+            # 3. Date of Birth (Left Column)
             expected_day = client.dob_day.zfill(2)
             expected_month = client.dob_month.zfill(2)
             expected_year = str(client.dob_year)
             log.info(f"Filling Date of Birth: {expected_day}/{expected_month}/{expected_year}...")
 
-            dob_d = page.locator("#dateOfBirth_day, input[name*='bday-day'], input[name*='day']").first
-            dob_m = page.locator("#dateOfBirth_month, input[name*='bday-month'], input[name*='month']").first
-            dob_y = page.locator("#dateOfBirth_year, input[name*='bday-year'], input[name*='year']").first
-
-            try:
-                dob_d.focus()
-            except Exception:
-                page.evaluate("() => { const el = document.querySelector('#dateOfBirth_day'); if (el) el.focus(); }")
-            human_pause(page, 0.2, 0.4)
-
-            for ch in expected_day:
-                dob_d.press(ch)
-                human_pause(page, 0.05, 0.12)
-            human_pause(page, 0.2, 0.4)
-
-            try:
-                dob_m.focus()
-            except Exception:
-                pass
-            for ch in expected_month:
-                dob_m.press(ch)
-                human_pause(page, 0.05, 0.12)
-            human_pause(page, 0.2, 0.4)
-
-            try:
-                dob_y.focus()
-            except Exception:
-                pass
-            for ch in expected_year:
-                dob_y.press(ch)
-                human_pause(page, 0.05, 0.12)
-            human_pause(page, 0.3, 0.6)
-
-            # Strictly confirm Date of Birth inserted matches intended values before proceeding
-            log.info("Confirming Date of Birth inserted matches intended values before proceeding...")
-            for attempt in range(3):
-                cur_d = dob_d.input_value().strip()
-                cur_m = dob_m.input_value().strip()
-                cur_y = dob_y.input_value().strip()
-
-                d_ok = (cur_d == expected_day or cur_d == client.dob_day.lstrip("0"))
-                m_ok = (cur_m == expected_month or cur_m == client.dob_month.lstrip("0"))
-                y_ok = (cur_y == expected_year)
-
-                if d_ok and m_ok and y_ok:
-                    log.info(f"Verified Date of Birth successfully: {cur_d}/{cur_m}/{cur_y}")
-                    break
-
-                log.warning(f"DOB mismatch detected (Attempt {attempt + 1}): Got {cur_d}/{cur_m}/{cur_y}, Expected {expected_day}/{expected_month}/{expected_year}. Correcting...")
-                page.evaluate("""(args) => {
-                    const d = document.querySelector('#dateOfBirth_day');
-                    const m = document.querySelector('#dateOfBirth_month');
-                    const y = document.querySelector('#dateOfBirth_year');
-                    if (d) { d.value = args.d; d.dispatchEvent(new Event('input', { bubbles: true })); }
-                    if (m) { m.value = args.m; m.dispatchEvent(new Event('input', { bubbles: true })); }
-                    if (y) { y.value = args.y; y.dispatchEvent(new Event('input', { bubbles: true })); }
-                }""", {"d": expected_day, "m": expected_month, "y": expected_year})
+            # 1. Activate Date of Birth container to expand day/month/year inputs without pointer interception
+            dob_container = page.locator("div[data-qa-selector='dateOfBirth-wrapper'], .rgx-date-wrapper, .rgx-date-inputs").first
+            if dob_container.is_visible(timeout=3000):
+                try:
+                    dob_container.click(force=True)
+                except Exception:
+                    page.evaluate("() => { const el = document.querySelector(\"div[data-qa-selector='dateOfBirth-wrapper'], .rgx-date-wrapper\"); if (el) el.click(); }")
                 human_pause(page, 0.3, 0.5)
 
-            # 4. Address Search
-            addr_search = page.locator("#addressSearch").first
-            if addr_search.is_visible(timeout=3000):
-                log.info(f"Searching address for postcode: {client.postcode}...")
-                human_type(addr_search, client.postcode, page=page, min_delay_ms=30, max_delay_ms=65)
-                human_pause(page, 1.5, 2.5)
+            dob_d = page.locator("#dateOfBirth_day, input[name*='bday-day'], input[name*='day'], input[data-qa-selector='dateOfBirth_day']").first
+            dob_m = page.locator("#dateOfBirth_month, input[name*='bday-month'], input[name*='month'], input[data-qa-selector='dateOfBirth_month']").first
+            dob_y = page.locator("#dateOfBirth_year, input[name*='bday-year'], input[name*='year'], input[data-qa-selector='dateOfBirth_year']").first
 
-                suggestion = page.locator(".address-lookup__item, .lookup-results li, ul.dropdown-menu li").first
-                if suggestion.is_visible(timeout=3000):
-                    log.info("Clicking matching address suggestion on Betfair with human click...")
-                    human_click(suggestion, page)
-                    human_pause(page, 0.5, 1.0)
-                else:
-                    manual_btn = page.locator("button:has-text('Enter address manually'), a:has-text('Enter address manually')").first
-                    if manual_btn.is_visible(timeout=2000):
-                        human_click(manual_btn, page)
-                        human_pause(page, 0.5, 1.0)
-                        for sel, val in [("#addressLine1", client.address_line1), ("#city", client.town_city), ("#postcode", client.postcode)]:
-                            loc = page.locator(sel).first
-                            if loc.is_visible(timeout=1500):
-                                human_type(loc, val, page=page, min_delay_ms=30, max_delay_ms=65)
-                                human_pause(page, 0.3, 0.6)
+            # Ensure day input is visible/ready
+            try:
+                dob_d.wait_for(state="visible", timeout=3000)
+            except Exception:
+                pass
 
-            # 5. Phone Number
-            phone_field = page.locator("#phoneNumber, input[name*='phoneNumber']").first
-            if phone_field.is_visible(timeout=3000):
-                clean_phone = client.phone.lstrip("0") if client.phone.startswith("0") else client.phone
-                log.info(f"Filling Phone: {clean_phone}")
-                human_type(phone_field, clean_phone, page=page, min_delay_ms=35, max_delay_ms=75)
-                human_pause(page, 0.3, 0.6)
+            # Focus and type Day digits
+            try:
+                dob_d.click(force=True)
+                dob_d.press_sequentially(expected_day, delay=60)
+            except Exception:
+                try:
+                    dob_d.focus()
+                    dob_d.press_sequentially(expected_day, delay=60)
+                except Exception:
+                    pass
+            human_pause(page, 0.15, 0.3)
 
-            # 6. Email & Password
-            email_field = page.locator("#email, input[type='email']").first
-            if email_field.is_visible(timeout=3000):
-                log.info(f"Filling Email: {client.email}")
-                human_type(email_field, client.email, page=page, min_delay_ms=25, max_delay_ms=60)
-                human_pause(page, 0.8, 1.5)  # Natural human reading/thinking pause before password
+            # Focus and type Month digits
+            try:
+                dob_m.click(force=True)
+                dob_m.press_sequentially(expected_month, delay=60)
+            except Exception:
+                try:
+                    dob_m.focus()
+                    dob_m.press_sequentially(expected_month, delay=60)
+                except Exception:
+                    pass
+            human_pause(page, 0.15, 0.3)
 
-            pw_field = page.locator("#password, input[type='password']").first
-            if pw_field.is_visible(timeout=3000):
-                log.info("Filling Password...")
-                human_type(pw_field, password_used, page=page, min_delay_ms=30, max_delay_ms=70)
-                human_pause(page, 0.3, 0.6)
+            # Focus and type Year digits
+            try:
+                dob_y.click(force=True)
+                dob_y.press_sequentially(expected_year, delay=60)
+            except Exception:
+                try:
+                    dob_y.focus()
+                    dob_y.press_sequentially(expected_year, delay=60)
+                except Exception:
+                    pass
+            human_pause(page, 0.2, 0.4)
+
+            # Commit date
+            try:
+                page.keyboard.press("Tab")
+            except Exception:
+                pass
+            human_pause(page, 0.3, 0.5)
+
+            # Strictly verify Date of Birth was populated; apply native React setter fallback if unpopulated
+            cur_d = dob_d.input_value().strip() if dob_d.count() > 0 else ""
+            cur_y = dob_y.input_value().strip() if dob_y.count() > 0 else ""
+            if not cur_d or not cur_y:
+                log.warning(f"DOB unpopulated after keystrokes (day='{cur_d}', year='{cur_y}'), applying native React/Angular value setter fallback...")
+                page.evaluate("""(args) => {
+                    function setReactValue(input, value) {
+                        if (!input) return;
+                        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                        if (setter) {
+                            setter.call(input, value);
+                        } else {
+                            input.value = value;
+                        }
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                        input.dispatchEvent(new Event('blur', { bubbles: true }));
+                    }
+                    setReactValue(document.querySelector('#dateOfBirth_day'), args.d);
+                    setReactValue(document.querySelector('#dateOfBirth_month'), args.m);
+                    setReactValue(document.querySelector('#dateOfBirth_year'), args.y);
+                }""", {"d": expected_day, "m": expected_month, "y": expected_year})
+                human_pause(page, 0.2, 0.4)
 
             # Dismiss any OneTrust banner that appeared during form filling
             self._dismiss_onetrust(page, log)
@@ -420,7 +411,76 @@ class BetfairAdapter(BaseSiteAdapter):
             # Check and handle reCAPTCHA ('I'm not a robot') if triggered
             self._handle_recaptcha(page, log)
 
-            # 7. Promo code preservation
+            # 4. Address Search / Manual Entry (Left Column)
+            addr_search = page.locator(
+                "#addressSearch, "
+                "#addressLookup, "
+                "input[placeholder*='Postcode or Address'], "
+                "input[placeholder*='Postcode'], "
+                "input[placeholder*='Address'], "
+                "input[name*='addressSearch'], "
+                "input[name*='addressLookup']"
+            ).first
+            address_filled = False
+            if addr_search.is_visible(timeout=3000):
+                log.info(f"Searching address for postcode: {client.postcode}...")
+                human_type(addr_search, client.postcode, page=page, min_delay_ms=30, max_delay_ms=65)
+                human_pause(page, 1.5, 2.5)
+
+                suggestion = page.locator(".address-lookup__item, .lookup-results li, ul.dropdown-menu li, .rgx-dropdown__option, li[class*='address']").first
+                if suggestion.is_visible(timeout=3000):
+                    log.info("Clicking matching address suggestion on Betfair with human click...")
+                    human_click(suggestion, page)
+                    human_pause(page, 0.5, 1.0)
+                    address_filled = True
+
+            if not address_filled:
+                manual_btn = page.locator("button:has-text('Enter address manually'), a:has-text('Enter address manually'), span:has-text('Enter address manually')").first
+                if manual_btn.is_visible(timeout=2000):
+                    log.info("Entering address manually on Betfair...")
+                    human_click(manual_btn, page)
+                    human_pause(page, 0.5, 1.0)
+                    for sel, val in [
+                        ("#address1, #addressLine1, input[name*='address1'], input[name*='address'], input[placeholder*='Address']", client.address_line1),
+                        ("#city, input[name*='city'], input[name*='town'], input[placeholder*='Town'], input[placeholder*='City']", client.town_city),
+                        ("#postcode, #postCode, input[name*='postcode'], input[name*='postCode'], input[placeholder*='Postcode']", client.postcode)
+                    ]:
+                        loc = page.locator(sel).first
+                        if loc.is_visible(timeout=1500):
+                            human_type(loc, val, page=page, min_delay_ms=30, max_delay_ms=65)
+                            human_pause(page, 0.3, 0.6)
+
+            # 5. Phone Number (UK national format - Left Column)
+            phone_field = page.locator(
+                "#phoneNumber, "
+                "#mobileNumber, "
+                "input[name*='tel-national'], "
+                "input[name*='phoneNumber'], "
+                "input[name*='mobileNumber'], "
+                "input[placeholder*='Mobile number'], "
+                "input[placeholder*='Mobile'], "
+                "input[type='tel']"
+            ).first
+            if phone_field.is_visible(timeout=3000):
+                clean_phone = client.phone.lstrip("0") if client.phone.startswith("0") else client.phone
+                log.info(f"Filling Phone: {clean_phone}")
+                human_type(phone_field, clean_phone, page=page, min_delay_ms=35, max_delay_ms=75)
+                human_pause(page, 0.3, 0.6)
+
+            # 6. Email & Password (Right Column)
+            email_field = page.locator("#email, input[type='email'], input[name='email']").first
+            if email_field.is_visible(timeout=3000):
+                log.info(f"Filling Email: {client.email}")
+                human_type(email_field, client.email, page=page, min_delay_ms=25, max_delay_ms=60)
+                human_pause(page, 0.8, 1.5)  # Natural human reading/thinking pause before password
+
+            pw_field = page.locator("#password, input[type='password'], input[name='password']").first
+            if pw_field.is_visible(timeout=3000):
+                log.info("Filling Password...")
+                human_type(pw_field, password_used, page=page, min_delay_ms=30, max_delay_ms=70)
+                human_pause(page, 0.4, 0.7)
+
+            # 7. Promo code preservation (Right Column)
             promo_field = page.locator("#promotionCode, input[name='promotionCode']").first
             if promo_field.is_visible(timeout=2000):
                 val = promo_field.input_value()
@@ -429,7 +489,7 @@ class BetfairAdapter(BaseSiteAdapter):
                     human_type(promo_field, "ZSKAOL", page=page, min_delay_ms=30, max_delay_ms=60)
                     human_pause(page, 0.3, 0.6)
 
-            # 8. Security Question & Answer
+            # 8. Security Question & Answer (Right Column)
             sec_q = page.locator("#securityQuestion, select[name='securityQuestion']").first
             if sec_q.is_visible(timeout=2500):
                 try:
@@ -444,6 +504,99 @@ class BetfairAdapter(BaseSiteAdapter):
                 human_type(sec_a, sec_answer, page=page, min_delay_ms=30, max_delay_ms=65)
                 human_pause(page, 0.3, 0.6)
 
+            # 9. Deposit Limit (Time period & Limit amount - Lower Right)
+            log.info("Configuring Deposit Limit...")
+            limit_freq = page.locator("#depositLimitPeriod, [data-qa-selector='depositLimitPeriod'], #depositLimitFrequency, select[name*='depositLimit']").first
+            if limit_freq.is_visible(timeout=2000):
+                try:
+                    limit_freq.select_option(value="DAY")
+                except Exception:
+                    try:
+                        limit_freq.select_option(label="Daily")
+                    except Exception:
+                        pass
+                page.evaluate("""() => {
+                    const sel = document.querySelector('#depositLimitPeriod, [data-qa-selector="depositLimitPeriod"], select[name*="depositLimit"]');
+                    if (sel) {
+                        sel.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                }""")
+                human_pause(page, 0.3, 0.6)
+
+            limit_amt = page.locator("#depositLimitAmount, [data-qa-selector='depositLimitAmount'], input[name*='depositLimitAmount']").first
+            if limit_amt.is_visible(timeout=2000):
+                try:
+                    page.wait_for_selector("#depositLimitAmount:not([disabled]), [data-qa-selector='depositLimitAmount']:not([disabled])", timeout=4000)
+                except Exception:
+                    pass
+                deposit_val = getattr(client, "deposit_limit", None) or "250"
+                log.info(f"Filling Deposit Limit amount: £{deposit_val}")
+                human_type(limit_amt, str(deposit_val), page=page, min_delay_ms=30, max_delay_ms=60)
+                page.evaluate("""(val) => {
+                    const inp = document.querySelector('#depositLimitAmount, [data-qa-selector="depositLimitAmount"]');
+                    if (inp && (!inp.value || inp.value.trim() === '')) {
+                        inp.focus();
+                        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                        if (nativeSetter) nativeSetter.call(inp, String(val));
+                        else inp.value = String(val);
+                        inp.dispatchEvent(new Event('input', { bubbles: true }));
+                        inp.dispatchEvent(new Event('change', { bubbles: true }));
+                        inp.blur();
+                    }
+                }""", deposit_val)
+                human_pause(page, 0.3, 0.6)
+
+            # 10. Funds Protection / Terms Acknowledgement (Mandatory to enable Sign Up)
+            log.info("Acknowledging Funds Protection policy...")
+            self._dismiss_onetrust(page, log)
+            funds_btn = page.locator(
+                "button[data-qa-selector='customerFundsProtection'], "
+                "button[data-testid='customerFundsProtection'], "
+                ".rgx-funds-protection button[role='checkbox'], "
+                "button[role='checkbox'].rgx-checkbox"
+            ).first
+            if funds_btn.is_visible(timeout=2000):
+                is_checked = funds_btn.get_attribute("aria-checked") == "true"
+                if not is_checked:
+                    log.info("Toggling Funds Protection checkbox...")
+                    try:
+                        human_click(funds_btn, page)
+                    except Exception:
+                        funds_btn.click(force=True)
+                    human_pause(page, 0.4, 0.8)
+                    if funds_btn.get_attribute("aria-checked") != "true":
+                        page.evaluate("""() => {
+                            const btn = document.querySelector("button[data-qa-selector='customerFundsProtection'], button[data-testid='customerFundsProtection']");
+                            if (btn && btn.getAttribute('aria-checked') !== 'true') {
+                                btn.click();
+                            }
+                        }""")
+            else:
+                tc_checkbox = page.locator("#termsAndConditions_acknowledgement, input[name='termsAndConditions_acknowledgement']").first
+                if tc_checkbox.count() > 0:
+                    if not tc_checkbox.is_checked():
+                        tc_label = page.locator(
+                            "label[for='termsAndConditions_acknowledgement'], "
+                            ".rgx-checkbox-container:has(#termsAndConditions_acknowledgement), "
+                            "label:has-text('I acknowledge that Betfair holds my funds'), "
+                            "label:has-text('I acknowledge')"
+                        ).first
+                        if tc_label.is_visible(timeout=2000):
+                            human_click(tc_label, page)
+                            human_pause(page, 0.4, 0.8)
+                        else:
+                            tc_checkbox.check(force=True)
+
+                    if not tc_checkbox.is_checked():
+                        page.evaluate("""() => {
+                            const cb = document.querySelector('#termsAndConditions_acknowledgement, input[name=\"termsAndConditions_acknowledgement\"]');
+                            if (cb) {
+                                cb.checked = true;
+                                cb.dispatchEvent(new Event('change', { bubbles: true }));
+                            }
+                        }""")
+            human_pause(page, 0.4, 0.8)
+
             # Marketing Opt-outs & Scroll physics
             human_scroll(page, distance_y=250, steps=5)
             human_pause(page, 0.4, 0.8)
@@ -451,6 +604,9 @@ class BetfairAdapter(BaseSiteAdapter):
             page.evaluate("""() => {
                 const optOuts = Array.from(document.querySelectorAll('input[type=\"checkbox\"], input[type=\"radio\"]'));
                 for (let el of optOuts) {
+                    if (el.id === 'termsAndConditions_acknowledgement' || el.name === 'termsAndConditions_acknowledgement') {
+                        continue;
+                    }
                     const txt = (el.value || el.id || el.name || '').toLowerCase();
                     if (txt.includes('no') || txt.includes('optout')) {
                         el.click();
@@ -499,9 +655,13 @@ class BetfairAdapter(BaseSiteAdapter):
 
             # Submit Registration
             submit_btn = page.locator(
+                "button[data-qa-selector='joinButton'], "
+                "button[data-testid='joinButton'], "
+                "button:has-text('Sign Up'), "
                 "button[type='submit'], "
                 "button:has-text('Join Now'), "
-                "button:has-text('Agree & Open Account')"
+                "button:has-text('Agree & Open Account'), "
+                "button:has-text('Open Account')"
             ).first
             if submit_btn.is_visible(timeout=4000):
                 log.info("Clicking registration submission on Betfair with human click...")

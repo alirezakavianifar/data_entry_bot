@@ -216,3 +216,69 @@ def test_betfred_adapter_instantiation():
     adapter = BetfredAdapter()
     assert adapter.site_id == "betfred"
     assert adapter.site_name == "Betfred"
+
+
+def test_bettom_verifying_spinner_does_not_exit_early(mock_client):
+    """
+    Verifies that when BetTOM displays 'Please wait, loading...' or verification spinner,
+    it does NOT exit early on iteration 0 as SUCCESS even if background text has 'Safer Gambling'.
+    """
+    from sites.bettom import BetTOMAdapter
+    adapter = BetTOMAdapter()
+    page = MagicMock()
+    page.url = "https://www.bettom.com/en/sport/"
+    page.is_closed.return_value = False
+
+    poll_calls = 0
+
+    loading_mock = MagicMock()
+    loading_mock.first = loading_mock
+
+    modal_container_mock = MagicMock()
+    modal_container_mock.first = modal_container_mock
+    modal_container_mock.is_visible.return_value = True
+
+    not_visible = MagicMock()
+    not_visible.first = not_visible
+    not_visible.is_visible.return_value = False
+
+    def locator_side_effect(selector):
+        nonlocal poll_calls
+        if any(k in selector for k in ("Please wait", "loading...", "Verifying")):
+            if poll_calls < 2:
+                loading_mock.is_visible.return_value = True
+                return loading_mock
+            else:
+                loading_mock.is_visible.return_value = False
+                return not_visible
+        elif any(k in selector for k in ("LoginModalContainer", "LoginModalContent", "RegisterWrapper")):
+            if poll_calls >= 2:
+                modal_container_mock.is_visible.return_value = False
+            return modal_container_mock
+        elif any(k in selector for k in ("ItemBalance", "ItemMyAccount", "AuthUser")):
+            if poll_calls >= 2:
+                auth_mock = MagicMock()
+                auth_mock.first = auth_mock
+                auth_mock.is_visible.return_value = True
+                return auth_mock
+            return not_visible
+        elif "body" in selector:
+            body_mock = MagicMock()
+            body_mock.inner_text.return_value = "Safer Gambling Football Tennis BetTOM"
+            return body_mock
+        return not_visible
+
+    def wait_side_effect(ms):
+        nonlocal poll_calls
+        poll_calls += 1
+
+    page.locator.side_effect = locator_side_effect
+    page.wait_for_timeout.side_effect = wait_side_effect
+
+    mock_log = MagicMock()
+    status, summary, ref = adapter._wait_for_verification_results(page, mock_client, mock_log)
+
+    assert status == RegistrationStatus.SUCCESS
+    # Must have polled at least twice while loading was active, not 0s
+    assert poll_calls >= 2
+
