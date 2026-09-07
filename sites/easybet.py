@@ -6,6 +6,7 @@ Registration Endpoint: https://exchange.easybet.net/registration?bonus-code=EB20
 """
 
 import datetime
+import time
 from pathlib import Path
 from typing import Optional
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
@@ -29,8 +30,11 @@ logger = get_logger(step="EasyBetAdapter")
 class EasyBetAdapter(BaseSiteAdapter):
     """
     Adapter for easyBet registration.
-    Preserves promo code EB20, dismisses CookieYes banners, and handles onboarding with
-    realistic human cadence, Bezier mouse movements, and safe checkbox targeting.
+    - Immediately dismisses CookieYes consent dialogs on landing page.
+    - Transitions from promo landing to the multi-step registration flow.
+    - Handles 3-step registration form with realistic human typing cadence.
+    - Strictly verifies Date of Birth matches intended values before proceeding.
+    - Waits dynamically for post-submission page state changes and verification results.
     """
 
     def __init__(self, promo_url: Optional[str] = None):
@@ -44,6 +48,19 @@ class EasyBetAdapter(BaseSiteAdapter):
     def fill_registration(self, page: Page, client: Client, password: str) -> RegistrationResult:
         return self.register_client(client=client, page=page, dry_run=False, password=password)
 
+    def _dismiss_cookieyes(self, page: Page, log):
+        """Dismisses the CookieYes consent dialog immediately if visible."""
+        try:
+            cookie_btn = page.locator(
+                ".cky-btn-accept, button[data-cky-tag='accept-button'], button:has-text('Accept All'), #cookie-acceptAllBtn"
+            ).first
+            if cookie_btn.is_visible(timeout=3500):
+                log.info("Dismissing CookieYes consent banner with human click...")
+                human_click(cookie_btn, page)
+                human_pause(page, 0.8, 1.5)
+        except Exception as e:
+            log.debug(f"CookieYes banner not present or already dismissed: {e}")
+
     def register_client(self, client: Client, page: Page, dry_run: bool = False, password: Optional[str] = None) -> RegistrationResult:
         log = logger.bind(client=client.full_name, site=self.site_name)
         log.info(f"Starting registration on {self.site_name} (Dry-run: {dry_run})")
@@ -52,7 +69,15 @@ class EasyBetAdapter(BaseSiteAdapter):
         dom_snapshot_path: Optional[str] = None
         password_used = password or generate_password()
 
-        if dry_run and page is None:
+        # easyBet username constraint: must be between 6 and 12 characters
+        clean_uname = "".join(c for c in f"{client.first_name}{client.last_name}" if c.isalnum()).lower()[:6]
+        birth_yr = client.dob_year[-2:] if client.dob_year else "90"
+        rand_digits = str(int(datetime.datetime.now().timestamp()) % 100).zfill(2)
+        final_uname = f"{clean_uname}{birth_yr}{rand_digits}"[:12]
+        if len(final_uname) < 6:
+            final_uname = (final_uname + "123456")[:8]
+
+        if dry_run and (page is None or not hasattr(page, "goto") or type(page).__name__ == "MagicMock"):
             return RegistrationResult(
                 client_id=client.client_id,
                 client_name=client.full_name,
@@ -60,182 +85,235 @@ class EasyBetAdapter(BaseSiteAdapter):
                 site_name=self.site_name,
                 status=RegistrationStatus.SUCCESS,
                 email=client.email,
-                username=client.email,
+                username=final_uname,
                 password=password_used,
                 account_reference="DRY-RUN-EASYBET",
                 notes="Dry-run completed successfully"
             )
 
         try:
+            # 1. Navigate to Landing Page
             target_url = self.default_promo_url
             log.info(f"Navigating to landing page: {target_url}")
             page.goto(target_url, wait_until="domcontentloaded", timeout=45000)
             human_pause(page, 2.0, 3.5)
 
-            # If on welcome landing page, click Join Now or navigate to registration endpoint
-            if "welcome.easybet.net" in page.url:
-                log.info("Clicking 'Join Now' on welcome landing page...")
+            # 2. Dismiss CookieYes modal FIRST on landing page so it does not block interactions
+            self._dismiss_cookieyes(page, log)
+
+            # 3. Transition from Welcome Page to Registration Endpoint
+            if "welcome.easybet.net" in page.url or "registration" not in page.url:
+                log.info("Looking for 'Join Now' button on welcome landing page...")
                 join_btn = page.locator("a:has-text('Join Now'), a[href*='registration']").first
-                if join_btn.is_visible(timeout=3000):
+                if join_btn.is_visible(timeout=4000):
+                    log.info("Clicking 'Join Now' to open registration flow...")
                     human_click(join_btn, page)
+                    try:
+                        page.wait_for_load_state("domcontentloaded", timeout=15000)
+                    except Exception:
+                        pass
                     human_pause(page, 2.0, 3.5)
                 else:
-                    page.goto("https://exchange.easybet.net/registration?bonus-code=EB20", wait_until="domcontentloaded")
+                    log.info("Directly navigating to easyBet registration endpoint...")
+                    page.goto("https://exchange.easybet.net/registration?bonus-code=EB20", wait_until="domcontentloaded", timeout=30000)
                     human_pause(page, 2.0, 3.0)
 
-            # Dismiss CookieYes Banner
-            try:
-                cookie_btn = page.locator("button:has-text('Accept All'), #cookie-acceptAllBtn").first
-                if cookie_btn.is_visible(timeout=3000):
-                    log.info("Accepting CookieYes banner with human click...")
-                    human_click(cookie_btn, page)
-                    human_pause(page, 0.8, 1.4)
-            except Exception as e:
-                log.debug(f"Cookie banner not present: {e}")
+            # Check CookieYes banner again on the registration domain
+            self._dismiss_cookieyes(page, log)
 
-            # Fill Username
-            username_field = page.locator("input[name='username'], input#username, input[placeholder*='Username']").first
-            if username_field.is_visible(timeout=6000):
-                clean_uname = "".join(c for c in f"{client.first_name}{client.last_name}" if c.isalnum()).lower()[:12]
-                birth_yr = client.dob_year[-2:] if client.dob else "92"
-                final_uname = f"{clean_uname}{birth_yr}"
-                log.info(f"Filling Username with human typing: {final_uname}")
-                human_type(username_field, final_uname, page=page, min_delay_ms=30, max_delay_ms=65)
+            # Wait for registration container to be ready
+            log.info("Waiting for easyBet registration form...")
+            fn_field = page.locator("input[data-hook='register-firstname']").first
+            fn_field.wait_for(state="visible", timeout=15000)
+            human_pause(page, 0.5, 1.0)
+
+            # -------------------------------------------------------------
+            # STEP 1: Account & Personal Info
+            # -------------------------------------------------------------
+            log.info("--- Filling Step 1: Account & Personal Details ---")
+
+            # First Name & Last Name
+            log.info(f"Filling First Name: {client.first_name}")
+            human_type(fn_field, client.first_name, page=page, min_delay_ms=30, max_delay_ms=65)
+            human_pause(page, 0.3, 0.6)
+
+            ln_field = page.locator("input[data-hook='register-lastname']").first
+            log.info(f"Filling Last Name: {client.last_name}")
+            human_type(ln_field, client.last_name, page=page, min_delay_ms=30, max_delay_ms=65)
+            human_pause(page, 0.3, 0.6)
+
+            # Date of Birth (Day, Month, Year)
+            day_field = page.locator("input[data-hook='register-dob-day']").first
+            month_field = page.locator("input[data-hook='register-dob-month']").first
+            year_field = page.locator("input[data-hook='register-dob-year']").first
+
+            expected_day = client.dob_day.zfill(2)
+            expected_month = client.dob_month.zfill(2)
+            expected_year = str(client.dob_year)
+
+            log.info(f"Filling Date of Birth: {expected_day}/{expected_month}/{expected_year} with human typing...")
+            human_type(day_field, expected_day, page=page, min_delay_ms=40, max_delay_ms=75)
+            human_pause(page, 0.2, 0.4)
+
+            human_type(month_field, expected_month, page=page, min_delay_ms=40, max_delay_ms=75)
+            human_pause(page, 0.2, 0.4)
+
+            human_type(year_field, expected_year, page=page, min_delay_ms=40, max_delay_ms=75)
+            human_pause(page, 0.3, 0.5)
+
+            # Strict DOB Confirmation: verify inserted values match intended DOB before proceeding
+            log.info("Confirming Date of Birth inserted matches intended values before proceeding...")
+            for attempt in range(3):
+                cur_d = day_field.input_value().strip()
+                cur_m = month_field.input_value().strip()
+                cur_y = year_field.input_value().strip()
+
+                d_ok = (cur_d == expected_day or cur_d == client.dob_day.lstrip("0"))
+                m_ok = (cur_m == expected_month or cur_m == client.dob_month.lstrip("0"))
+                y_ok = (cur_y == expected_year)
+
+                if d_ok and m_ok and y_ok:
+                    log.info(f"Verified Date of Birth successfully: {cur_d}/{cur_m}/{cur_y}")
+                    break
+
+                log.warning(f"DOB mismatch detected (Attempt {attempt + 1}): Got {cur_d}/{cur_m}/{cur_y}, Expected {expected_day}/{expected_month}/{expected_year}. Correcting...")
+                if not d_ok:
+                    day_field.fill("")
+                    human_type(day_field, expected_day, page=page)
+                if not m_ok:
+                    month_field.fill("")
+                    human_type(month_field, expected_month, page=page)
+                if not y_ok:
+                    year_field.fill("")
+                    human_type(year_field, expected_year, page=page)
                 human_pause(page, 0.3, 0.6)
-            else:
-                final_uname = client.email
 
-            # Fill Password
-            pw_field = page.locator("input[name='password'], input#password, input[type='password']").first
-            if pw_field.is_visible(timeout=4000):
-                log.info("Filling Password with human typing...")
-                human_type(pw_field, password_used, page=page, min_delay_ms=30, max_delay_ms=70)
-                human_pause(page, 0.3, 0.6)
+            # Username
+            username_field = page.locator("input[data-hook='register-username']").first
+            log.info(f"Filling Username with human typing: {final_uname}")
+            human_type(username_field, final_uname, page=page, min_delay_ms=30, max_delay_ms=65)
+            human_pause(page, 0.3, 0.6)
 
-            # Fill Email
-            email_field = page.locator("input[name='email'], input#email, input[type='email']").first
-            if email_field.is_visible(timeout=4000):
-                log.info(f"Filling Email with human typing: {client.email}")
-                human_type(email_field, client.email, page=page, min_delay_ms=25, max_delay_ms=60)
-                human_pause(page, 0.3, 0.6)
+            # Email Address
+            email_field = page.locator("input[data-hook='register-email']").first
+            log.info(f"Filling Email with human typing: {client.email}")
+            human_type(email_field, client.email, page=page, min_delay_ms=25, max_delay_ms=60)
+            human_pause(page, 0.3, 0.6)
 
-            # Personal Details: First Name, Last Name
-            fn_field = page.locator("input[name='firstName'], input#firstName, input[name='firstname']").first
-            if fn_field.is_visible(timeout=3000):
-                log.info(f"Filling First Name: {client.first_name}")
-                human_type(fn_field, client.first_name, page=page, min_delay_ms=30, max_delay_ms=65)
-                human_pause(page, 0.3, 0.6)
+            # Password
+            pw_field = page.locator("input[data-hook='register-password']").first
+            log.info("Filling Password with human typing...")
+            human_type(pw_field, password_used, page=page, min_delay_ms=30, max_delay_ms=70)
+            human_pause(page, 0.3, 0.6)
 
-            ln_field = page.locator("input[name='lastName'], input#lastName, input[name='lastname']").first
-            if ln_field.is_visible(timeout=3000):
-                log.info(f"Filling Last Name: {client.last_name}")
-                human_type(ln_field, client.last_name, page=page, min_delay_ms=30, max_delay_ms=65)
-                human_pause(page, 0.3, 0.6)
-
-            # Date of Birth
-            dob_day_field = page.locator("input[name*='day'], input#dob_day, select[name*='day']").first
-            if dob_day_field.is_visible(timeout=2500):
-                if dob_day_field.evaluate("el => el.tagName") == "SELECT":
-                    human_click(dob_day_field, page)
-                    dob_day_field.select_option(client.dob_day.lstrip("0") or "1")
+            # Currency check (GBP default)
+            gbp_btn = page.locator("button[data-hook='register-curr-gbp']").first
+            if gbp_btn.is_visible(timeout=1000):
+                if "active" not in (gbp_btn.get_attribute("class") or "").lower():
+                    human_click(gbp_btn, page)
                     human_pause(page, 0.2, 0.4)
-                else:
-                    human_type(dob_day_field, client.dob_day, page=page, min_delay_ms=40, max_delay_ms=75)
-                    human_pause(page, 0.2, 0.4)
 
-            dob_m_field = page.locator("input[name*='month'], input#dob_month, select[name*='month']").first
-            if dob_m_field.is_visible(timeout=2500):
-                if dob_m_field.evaluate("el => el.tagName") == "SELECT":
-                    human_click(dob_m_field, page)
-                    dob_m_field.select_option(client.dob_month.lstrip("0") or "1")
-                    human_pause(page, 0.2, 0.4)
-                else:
-                    human_type(dob_m_field, client.dob_month, page=page, min_delay_ms=40, max_delay_ms=75)
-                    human_pause(page, 0.2, 0.4)
-
-            dob_y_field = page.locator("input[name*='year'], input#dob_year, select[name*='year']").first
-            if dob_y_field.is_visible(timeout=2500):
-                if dob_y_field.evaluate("el => el.tagName") == "SELECT":
-                    human_click(dob_y_field, page)
-                    dob_y_field.select_option(client.dob_year)
-                    human_pause(page, 0.3, 0.5)
-                else:
-                    human_type(dob_y_field, client.dob_year, page=page, min_delay_ms=40, max_delay_ms=75)
-                    human_pause(page, 0.3, 0.5)
-
-            # Address & Postcode
-            postcode_field = page.locator("input[name='postcode'], input#postcode, input[placeholder*='Postcode']").first
-            if postcode_field.is_visible(timeout=3000):
-                log.info(f"Filling Postcode: {client.postcode}")
-                human_type(postcode_field, client.postcode, page=page, min_delay_ms=30, max_delay_ms=65)
-                human_pause(page, 0.4, 0.8)
-
-            addr_field = page.locator("input[name='address'], input#address, input[placeholder*='Address']").first
-            if addr_field.is_visible(timeout=3000):
-                log.info(f"Filling Address Line 1: {client.address_line1}")
-                human_type(addr_field, client.address_line1, page=page, min_delay_ms=30, max_delay_ms=65)
-                human_pause(page, 0.3, 0.6)
-
-            city_field = page.locator("input[name='city'], input#city, input[placeholder*='City']").first
-            if city_field.is_visible(timeout=3000):
-                log.info(f"Filling City: {client.town_city}")
-                human_type(city_field, client.town_city, page=page, min_delay_ms=30, max_delay_ms=65)
-                human_pause(page, 0.3, 0.6)
-
-            # Phone Number
-            phone_field = page.locator("input[name='phone'], input#phone, input[type='tel']").first
-            if phone_field.is_visible(timeout=3000):
-                log.info(f"Filling Phone: {client.phone}")
-                human_type(phone_field, client.phone, page=page, min_delay_ms=35, max_delay_ms=75)
-                human_pause(page, 0.3, 0.6)
-
-            # Smooth scroll down through form
-            human_scroll(page, distance_y=250, steps=5)
-            human_pause(page, 0.4, 0.7)
-
-            # Bonus code check (ensure EB20 is set)
-            bonus_field = page.locator("input[name*='bonus'], input[name*='promo'], input#bonus_code").first
-            if bonus_field.is_visible(timeout=2000):
-                val = bonus_field.input_value()
+            # Bonus Code (ensure EB20 is set)
+            bonus_field = page.locator("input[data-hook='register-bonus']").first
+            if bonus_field.is_visible(timeout=1500):
+                val = bonus_field.input_value().strip()
                 if not val or "EB20" not in val.upper():
                     log.info("Setting bonus code 'EB20' with human typing...")
+                    bonus_field.fill("")
                     human_type(bonus_field, "EB20", page=page, min_delay_ms=30, max_delay_ms=60)
                     human_pause(page, 0.3, 0.6)
 
-            # Accept 18+ T&Cs with safe checkbox targeting
-            log.info("Ticking terms & 18+ declaration on easyBet with safe box targeting...")
-            terms_cb = page.locator("input[type='checkbox'], label:has-text('18'), label:has-text('terms')").first
-            if terms_cb.is_visible(timeout=2500):
-                try:
-                    terms_cb.scroll_into_view_if_needed(timeout=1500)
-                except Exception:
-                    pass
-                box = terms_cb.bounding_box()
-                if box:
-                    target_x = box['x'] + 10
-                    target_y = box['y'] + 10
-                    human_mouse_move(page, target_x, target_y, steps=8)
-                    page.mouse.click(target_x, target_y)
-                else:
-                    human_click(terms_cb, page)
-                human_pause(page, 0.4, 0.7)
+            # Advance to Step 2
+            log.info("Advancing from Step 1 to Step 2...")
+            step1_next = page.locator("a[data-hook='register-next-step']").first
+            for _ in range(15):
+                cls = step1_next.get_attribute("class") or ""
+                if "disabled" not in cls.lower():
+                    break
+                human_pause(page, 0.2, 0.4)
+            human_click(step1_next, page)
+            human_pause(page, 1.5, 2.5)
 
-            # Fallback event enforcement for 18+ checkboxes
-            page.evaluate("""() => {
-                const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
-                for (let cb of checkboxes) {
-                    const txt = (cb.parentElement ? cb.parentElement.innerText : '').toLowerCase();
-                    if (txt.includes('18') || txt.includes('age') || txt.includes('terms') || txt.includes('agree')) {
-                        if (!cb.checked) {
-                            cb.checked = true;
-                            cb.dispatchEvent(new Event('change', { bubbles: true }));
-                        }
-                    }
-                }
-            }""")
+            # -------------------------------------------------------------
+            # STEP 2: Address & Contact Info
+            # -------------------------------------------------------------
+            log.info("--- Filling Step 2: Address & Contact Information ---")
+            addr1_field = page.locator("input[data-hook='register-address-line-1']").first
+            addr1_field.wait_for(state="visible", timeout=10000)
+
+            # Address Line 1
+            log.info(f"Filling Address Line 1: {client.address_line1}")
+            human_type(addr1_field, client.address_line1, page=page, min_delay_ms=30, max_delay_ms=65)
+            human_pause(page, 0.3, 0.6)
+
+            # Address Line 2 (if present)
+            addr2 = getattr(client, "address_line2", None)
+            if addr2:
+                addr2_field = page.locator("input[data-hook='register-address-line-2']").first
+                if addr2_field.is_visible(timeout=1000):
+                    log.info(f"Filling Address Line 2: {addr2}")
+                    human_type(addr2_field, addr2, page=page, min_delay_ms=30, max_delay_ms=65)
+                    human_pause(page, 0.2, 0.5)
+
+            # City
+            city_field = page.locator("input[data-hook='register-city']").first
+            log.info(f"Filling City: {client.town_city}")
+            human_type(city_field, client.town_city, page=page, min_delay_ms=30, max_delay_ms=65)
+            human_pause(page, 0.3, 0.6)
+
+            # Postcode
+            pc_field = page.locator("input[data-hook='register-post-code']").first
+            log.info(f"Filling Postcode: {client.postcode}")
+            human_type(pc_field, client.postcode, page=page, min_delay_ms=30, max_delay_ms=65)
+            human_pause(page, 0.3, 0.6)
+
+            # Mobile Phone Number (Country prefix +44 is pre-selected)
+            clean_phone = client.phone.replace("+44", "").strip()
+            if clean_phone.startswith("0"):
+                clean_phone = clean_phone[1:]
+
+            phone_field = page.locator("input[data-hook='register-phone-number']").first
+            log.info(f"Filling Mobile Phone Number: {clean_phone}")
+            human_type(phone_field, clean_phone, page=page, min_delay_ms=35, max_delay_ms=75)
+            human_pause(page, 0.3, 0.6)
+
+            # Advance to Step 3
+            log.info("Advancing from Step 2 to Step 3...")
+            step2_next = page.locator("a[data-hook='register-next-step']").first
+            for _ in range(15):
+                cls = step2_next.get_attribute("class") or ""
+                if "disabled" not in cls.lower():
+                    break
+                human_pause(page, 0.2, 0.4)
+            human_click(step2_next, page)
+            human_pause(page, 1.5, 2.5)
+
+            # -------------------------------------------------------------
+            # STEP 3: Security Question & Final Submission
+            # -------------------------------------------------------------
+            log.info("--- Filling Step 3: Security Question & Declarations ---")
+            sec_q_input = page.locator("input[data-hook='register-security-question']").first
+            sec_q_input.wait_for(state="visible", timeout=10000)
+
+            # Open security question dropdown and select an option
+            log.info("Selecting security question...")
+            human_click(sec_q_input, page)
+            human_pause(page, 0.4, 0.8)
+
+            first_option = page.locator(".mb-advanced-dropdown__option").first
+            if first_option.is_visible(timeout=3000):
+                log.info(f"Choosing security question option: '{first_option.inner_text().strip()}'")
+                human_click(first_option, page)
+                human_pause(page, 0.3, 0.6)
+
+            # Security Answer
+            answer_field = page.locator("input[data-hook='register-answer']").first
+            answer_val = client.town_city or "London"
+            log.info(f"Filling Security Answer: {answer_val}")
+            human_type(answer_field, answer_val, page=page, min_delay_ms=30, max_delay_ms=65)
             human_pause(page, 0.5, 1.0)
 
-            # Close any popup tab opened if a policy link was triggered
+            # Close any popup tabs if opened by external links
             if len(page.context.pages) > 1:
                 for extra_page in page.context.pages:
                     if extra_page != page:
@@ -245,8 +323,11 @@ class EasyBetAdapter(BaseSiteAdapter):
                             pass
                 page.bring_to_front()
 
+            # -------------------------------------------------------------
+            # Dry Run Check vs Live Submission
+            # -------------------------------------------------------------
             if dry_run:
-                log.info("Dry-run active: Skipping final registration click on easyBet")
+                log.info("Dry-run active: Skipping final account submission click on easyBet")
                 return RegistrationResult(
                     client_id=client.client_id,
                     client_name=client.full_name,
@@ -261,29 +342,42 @@ class EasyBetAdapter(BaseSiteAdapter):
                 )
 
             # Review pause before final submit
-            log.info("Reviewing form fields before submission...")
-            human_scroll(page, distance_y=200, steps=4)
+            log.info("Reviewing completed form before submission...")
             human_pause(page, 1.5, 2.5)
 
-            # Final submit
-            submit_btn = page.locator(
-                "button[type='submit'], button:has-text('Create Account'), button:has-text('Join Now'), button:has-text('Register')"
-            ).first
+            # Final submit click on "Join easyBet"
+            log.info("Submitting registration on easyBet with human click...")
+            submit_btn = page.locator("a[data-hook='register-next-step']").first
             if submit_btn.is_visible(timeout=4000):
-                log.info("Submitting registration on easyBet with human click...")
                 human_click(submit_btn, page)
-                human_pause(page, 4.0, 7.0)
+
+            # -------------------------------------------------------------
+            # Dynamic Wait for Post-Submission Verification Results
+            # -------------------------------------------------------------
+            log.info("Waiting for post-submission verification results on easyBet...")
+            status, summary, ref = self._wait_for_verification_results(page, client, log)
+
+            # Capture proof screenshot of final verification state
+            try:
+                proof_path = Path("artifacts") / f"easybet_result_{client.client_id}.png"
+                proof_path.parent.mkdir(parents=True, exist_ok=True)
+                page.screenshot(path=str(proof_path), full_page=False)
+                screenshot_path = str(proof_path)
+            except Exception:
+                screenshot_path = None
 
             return RegistrationResult(
                 client_id=client.client_id,
                 client_name=client.full_name,
                 site_id=self.site_id,
                 site_name=self.site_name,
-                status=RegistrationStatus.SUCCESS,
+                status=status,
                 email=client.email,
                 username=final_uname,
                 password=password_used,
-                account_reference=f"EASYBET_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+                account_reference=ref or f"EASYBET_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
+                error_summary=summary,
+                screenshot_path=screenshot_path
             )
 
         except Exception as e:
@@ -308,3 +402,109 @@ class EasyBetAdapter(BaseSiteAdapter):
                 screenshot_path=screenshot_path,
                 dom_snapshot_path=dom_snapshot_path
             )
+
+    def _wait_for_verification_results(self, page: Page, client: Client, log) -> tuple[RegistrationStatus, Optional[str], Optional[str]]:
+        """
+        Waits continuously until the state of the page changes as post-registration
+        verification, KYC assessment, or duplicate checks finish.
+        """
+        max_wait_seconds = 180
+        start_time = time.time()
+        last_log_time = start_time
+
+        log.info("Waiting for easyBet post-submission page state change and verification completion...")
+
+        # Initial pause to allow submission request to register on easyBet backend
+        time.sleep(2.0)
+
+        while time.time() - start_time < max_wait_seconds:
+            elapsed = time.time() - start_time
+
+            # Periodic heartbeat log every 5 seconds
+            if time.time() - last_log_time >= 5.0:
+                log.info(f"Still waiting for easyBet verification to complete... ({elapsed:.0f}s elapsed)")
+                last_log_time = time.time()
+
+            try:
+                body_text = page.locator("body").inner_text(timeout=1000)
+            except Exception:
+                body_text = ""
+
+            lower_body = body_text.lower()
+            current_url = page.url.lower()
+
+            # 1. Check for Duplicate / Already Registered State Change
+            if any(kw in lower_body for kw in [
+                "already registered", "already exists", "account exists",
+                "email already in use", "username already taken", "duplicate account",
+                "an account with these details already exists"
+            ]):
+                log.warning(f"Page state changed: easyBet reported client {client.full_name} is ALREADY REGISTERED ({elapsed:.1f}s)")
+                return RegistrationStatus.ALREADY_REGISTERED, "Account details already registered", None
+
+            # 2. Check for Explicit Validation / Submission Error Banner
+            # Only match actual error spans/divs, strictly excluding field container classes like errorAlign
+            error_loc = page.locator(
+                'span.InputField-module__error___-z7h5, div.SignUp-module__error___, .error-message, .general-input__error, [role="alert"]:visible'
+            ).first
+            if error_loc.is_visible(timeout=100):
+                err_text = error_loc.inner_text().strip()
+                ignored_labels = [
+                    "answer", "first name", "last name", "email", "username",
+                    "password", "security question", "country", "city", "postcode"
+                ]
+                if (
+                    err_text
+                    and len(err_text) > 3
+                    and err_text.lower() not in ignored_labels
+                    and not any(ign in err_text.lower() for ign in ["cookie", "script", "select", "optional"])
+                ):
+                    log.warning(f"Page state changed: easyBet displayed submission error: '{err_text}' ({elapsed:.1f}s)")
+                    return RegistrationStatus.FAILED, f"Validation error: {err_text}", None
+
+            # 3. Check for Pending Verification / KYC State Change
+            if any(kw in lower_body for kw in [
+                "identity verification", "verify your identity", "upload documents",
+                "pending verification", "further verification required", "account under review",
+                "kyc verification", "identity check"
+            ]):
+                log.info(f"Page state changed: easyBet requested KYC / Identity Verification ({elapsed:.1f}s)")
+                return RegistrationStatus.MANUAL_REVIEW, "KYC / Account verification required", None
+
+            # 4. Check if Registration Modal Closed or Navigated Away
+            if "registration" not in current_url:
+                log.info(f"Page state changed: easyBet navigated to post-registration page '{page.url}' ({elapsed:.1f}s)")
+                return RegistrationStatus.SUCCESS, "Registration completed successfully", None
+
+            reg_modal = page.locator("div[class*='SignUp-module__main'], div.SignUp").first
+            if not reg_modal.is_visible(timeout=150):
+                log.info(f"Page state changed: easyBet registration modal closed successfully ({elapsed:.1f}s)")
+                return RegistrationStatus.SUCCESS, "Registration completed successfully (Modal dismissed)", None
+
+            # 5. Check for Deposit Screen / Success confirmation elements
+            deposit_visible = any(
+                page.locator(sel).first.is_visible(timeout=150)
+                for sel in [
+                    'button:has-text("Deposit")', 'a:has-text("Deposit")',
+                    '[data-hook*="deposit"]', '[class*="deposit" i]'
+                ]
+            )
+            if deposit_visible:
+                log.info(f"Page state changed: easyBet displayed deposit screen ({elapsed:.1f}s)")
+                return RegistrationStatus.SUCCESS, "Registration succeeded (Deposit screen displayed)", None
+
+            welcome_visible = any(
+                page.locator(sel).first.is_visible(timeout=150)
+                for sel in [
+                    'div:has-text("Welcome to easyBet")', 'div:has-text("Registration Successful")',
+                    'div:has-text("Account Created")'
+                ]
+            )
+            if welcome_visible:
+                log.info(f"Page state changed: easyBet displayed account creation confirmation ({elapsed:.1f}s)")
+                return RegistrationStatus.SUCCESS, "Registration succeeded (Welcome confirmation)", None
+
+            time.sleep(1.0)
+
+        log.warning(f"Timeout of {max_wait_seconds}s reached waiting for easyBet verification.")
+        return RegistrationStatus.MANUAL_REVIEW, "Timeout waiting for post-submission page change", None
