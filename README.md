@@ -57,11 +57,12 @@ Includes both a **Modern Desktop GUI Application** and a **Command-Line Interfac
     - **Momentum Wheel Scrolling (`human_scroll`):** Multi-step mouse-wheel scrolling with momentum easing and jitter down the page.
     - **Safe Checkbox Targeting:** Specifically targets the box square (`[part="checkbox"]` or coordinate offset `x+10, y+10`) rather than the text label to eliminate accidental clicks on "Terms" or "Privacy Policy" external links, and automatically closes any unwanted popup tabs.
   - **BetTOM (`https://www.bettom.com/en/sport/`):** Full EveryMatrix Polymer shadow DOM integration with Cybot Cookiebot bypass, dynamic UK personal title selection (`Mr.`, `Mrs.`, `Miss`, `Ms.`), ISO DOB handling, address matching, safe 18+ declaration, active post-submission verification polling (tracking "Please wait, loading..." spinners without premature exit), and Step 2 Marketing Preferences automation.
-  - **easyBet (`https://welcome.easybet.net/EB20-Football`):** Automated sports exchange onboarding preserving the welcome bonus code `EB20`, CookieYes consent dismissal, and human-cadence multi-step form entry.
+  - **easyBet (`https://welcome.easybet.net/EB20-Football`):** Automated sports exchange onboarding preserving the welcome bonus code `EB20`, CookieYes consent dismissal, human-cadence multi-step form entry, dynamic post-submission verification waiting (actively observing page state until positive website feedback such as Deposit screens, welcome onboarding modals, or user profile indicators confirm the account without premature teardown), in-session authentication verification, and dedicated exchange login automation on `https://exchange.easybet.net/`.
   - **247 Bet (`https://www.247bet.com/en-gb/register`):** Multi-step White Hat Gaming UK account creation covering credentials, personal details, address lookup, safe checkbox ticking, and marketing preferences.
   - **Paddy Power (`https://redirect.rp-offers.com/?id=9708`):** Flutter Entertainment registration with active Session Warming (visits promo landing page, accepts cookies, simulates natural browsing/scrolling, and transits via authentic in-page CTA with natural Referer), OneTrust auto-dismissal observer, reCAPTCHA Enterprise detection & operator pause handling, automated Deposit Limit configuration (`#depositLimitPeriod` option `DAY` + `#depositLimitAmount`), mandatory Funds Protection policy button toggle (`button[data-qa-selector='customerFundsProtection']`), and `button[data-qa-selector='joinButton']`.
   - **Betfair (`https://redirect.rp-offers.com/?id=8827`):** Flutter Entertainment registration with active Session Warming, welcome promo code `ZSKAOL` retention, OneTrust auto-dismissal observer, reCAPTCHA Enterprise detection & operator pause handling, security question configuration, automated Deposit Limit configuration (`#depositLimitPeriod` option `DAY` + `#depositLimitAmount`), mandatory Funds Protection policy button toggle (`button[data-qa-selector='customerFundsProtection']`), and `button[data-qa-selector='joinButton']`.
-  - **DragonBet (`https://bettinglounge.co.uk/out/ZRKfXhAAACkAStm_/?offer=betting`):** Playbook Engineering platform adapter featuring full human-paced interaction, responsible gambling deposit limit bypass, and deposit skip handling.
+  - **DragonBet (`https://dragonbet.co.uk/` / Direct Fallback):** Playbook Engineering platform adapter featuring full human-paced interaction, dynamic title selection (`Mr` / `Ms`), DOB, mobile, postcode lookup with automated Scottish address normalization, responsible gambling net deposit limit configuration, deposit step skipping, and duplicate operating license detection.
+  - **DragonBet Betting Lounge #2 (`https://bettinglounge.co.uk/out/ZRKfXhAAACkAStm_/?offer=betting`):** Specialized affiliate campaign adapter for DragonBet that seamlessly handles third-party affiliate redirects with direct fallback, cookie consent, and end-to-end registration flow.
   - **Mandatory 25-Day Betting Embargo Rule:**
     - Automatically enforces the cooling-off policy on **Paddy Power** and **Betfair**.
     - Calculates the registration date (`signup_date = DD/MM/YYYY`) and the acceptable betting date (`acceptable_to_bet_date = signup_date + 25 days`).
@@ -89,11 +90,15 @@ Includes both a **Modern Desktop GUI Application** and a **Command-Line Interfac
 - **Dual Data Source Support:**
   - **Local Excel Mode:** Reads from `Test.xlsx` (`'Client Details'` tab starting at row 3) and writes credentials directly to `'Succesful Signuos'` tab.
   - **Google Sheets Mode:** Connects live via `gspread` service account credentials with identical input and output mapping.
+  - **Actionable Client Notification in Spreadsheets:** When registrations fail due to actionable client issues (such as mobile number validation rejection *"We could not validate your mobile number, please check and try again."*), the bot automatically records the exact failure reason into the `Notes` column of the client's row on the `'Client Details'` tab in Excel or Google Sheets.
 - **Multi-Modal Diagnostic & Failure Logging:**
   - Standardized console logs and rolling `logs/bot.log`.
   - Dedicated `logs/error.log` for warnings and errors with stack traces.
   - Visual proof screenshots (`logs/artifacts/<timestamp>_<client>_<site>_LOGIN_PROOF.png`).
   - Automatic failure bundles in `logs/artifacts/` capturing full-page `.png` screenshots, raw HTML DOM snapshots (`.html`), and Playwright trace archives (`.zip`).
+- **Inline Validation & Submit Protection:**
+  - **Immediate Field Validation Detection:** Detects site-side validation rejections (such as mobile number validation errors, invalid postcodes, or age restrictions) right after typing and unfocusing, cleanly aborting with failure screenshots before wasting time on subsequent fields.
+  - **Disabled Form Submission Safeguard:** Checks for `.invalid-form-btn` and visible validation banners prior to clicking submit, ensuring false successes are never declared when a form is blocked.
 - **Resilient & Idempotent State Management (`core/state.py`):**
   - Tracks registration and login verification states (`PENDING`, `IN_PROGRESS`, `SUCCESS`, `FAILED`, `MANUAL_REVIEW`, `SKIPPED`) in SQLite (`state.db`).
   - **Automatic Batch Advancement & Failed Record Skipping:** Automatically skips previously finished (`SUCCESS`, `ALREADY_REGISTERED`) as well as previously failed (`FAILED`, `MANUAL_REVIEW`) records on subsequent batch runs so the engine moves smoothly to fresh clients.
@@ -290,16 +295,24 @@ To use a live Google Sheet instead of local Excel:
 
 To visually observe registration, address matching, form progression, and deposit handling live on your screen in a visible Google Chrome window:
 
-### 1. Playbook Engineering Sites (BresBet, Star Sports, Planet Sport Bet, Bet St George)
-- **Interactive Launcher**: Double-click **`run_visual_verification.bat`** in the project root.
-- **Command Line**:
+### 1. Interactive Desktop Launcher
+- **Interactive Launcher**: Double-click **`run_visual_verification.bat`** in the project root to select any of the 15 supported bookmakers:
+  - `1-4`: **BresBet**, **Star Sports**, **Planet Sport Bet**, **Bet St George** (Playbook Platform)
+  - `5-8`: **Fairplay Bet**, **Betfred**, **QuinnBet**, **Betgoodwin**
+  - `9-13`: **BetTOM**, **easyBet**, **247 Bet**, **Paddy Power**, **Betfair**
+  - `14`: **DragonBet** (Direct / Promo)
+  - `15`: **DragonBet (Betting Lounge #2)** (Affiliate Redirect)
+  - `16`: **Phase 2 Sites Only** (Sequential)
+  - `17`: **All Sites** (Sequential)
+
+- **Command Line Examples**:
   ```powershell
-  python scripts\verify_nonheadless.py bresbet
-  python scripts\verify_nonheadless.py starsports
-  python scripts\verify_nonheadless.py planetsportbet
-  python scripts\verify_nonheadless.py betstgeorge
-  python scripts\verify_nonheadless.py playbook    # All 4 Playbook sites sequentially
-  python scripts\verify_nonheadless.py all         # All 8 supported bookmakers
+  python scripts\verify_nonheadless.py dragonbet
+  python scripts\verify_nonheadless.py bettinglounge2
+  python scripts\verify_nonheadless.py betfair
+  python scripts\verify_nonheadless.py paddypower
+  python scripts\verify_nonheadless.py playbook    # All Playbook sites sequentially
+  python scripts\verify_nonheadless.py all         # All supported bookmakers
   ```
 
 ### 2. Remaining Bookmakers (Betfred, QuinnBet, Betgoodwin, Fairplay Bet)

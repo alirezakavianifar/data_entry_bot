@@ -22,7 +22,7 @@ from sites.base import (
 )
 from core.password_gen import generate_password
 from data.models import Client, RegistrationResult, RegistrationStatus
-from core.logger import get_logger, capture_failure_bundle
+from core.logger import get_logger, capture_failure_bundle, capture_login_proof_screenshot, capture_success_screenshot
 
 logger = get_logger(step="EasyBetAdapter")
 
@@ -357,6 +357,26 @@ class EasyBetAdapter(BaseSiteAdapter):
             log.info("Waiting for post-submission verification results on easyBet...")
             status, summary, ref = self._wait_for_verification_results(page, client, log)
 
+            # Check if in-session authentication is confirmed
+            is_authenticated = False
+            if status == RegistrationStatus.SUCCESS:
+                try:
+                    deposit_cta = page.locator('button:has-text("Deposit"), a:has-text("Deposit"), [data-hook*="deposit"]').first
+                    onboarding = page.locator('.CustomerOnboarding-module__modal, div:has-text("Welcome to easyBet"), div:has-text("Pick a side. Bet YES or NO")').first
+                    user_icon = page.locator('a[data-hook="header-user-account"], .UserButtons-module__userIcon, [class*="userIcon" i]').first
+                    login_cta = page.locator('a[data-hook="header-direct-login"], a:has-text("Log In")').first
+                    if (
+                        ref == "EASYBET_AUTH_CONFIRMED"
+                        or deposit_cta.is_visible(timeout=500)
+                        or onboarding.is_visible(timeout=500)
+                        or user_icon.is_visible(timeout=500)
+                        or not login_cta.is_visible(timeout=500)
+                    ):
+                        is_authenticated = True
+                        log.info(f"✅ In-session authentication verified during registration for {client.full_name} on easyBet.")
+                except Exception:
+                    pass
+
             # Capture proof screenshot of final verification state
             try:
                 proof_path = Path("artifacts") / f"easybet_result_{client.client_id}.png"
@@ -377,7 +397,9 @@ class EasyBetAdapter(BaseSiteAdapter):
                 password=password_used,
                 account_reference=ref or f"EASYBET_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
                 error_summary=summary,
-                screenshot_path=screenshot_path
+                screenshot_path=screenshot_path,
+                login_verified=is_authenticated,
+                login_screenshot_path=screenshot_path if is_authenticated else None
             )
 
         except Exception as e:
@@ -406,23 +428,24 @@ class EasyBetAdapter(BaseSiteAdapter):
     def _wait_for_verification_results(self, page: Page, client: Client, log) -> tuple[RegistrationStatus, Optional[str], Optional[str]]:
         """
         Waits continuously until the state of the page changes as post-registration
-        verification, KYC assessment, or duplicate checks finish.
+        verification, KYC assessment, duplicate checks, or positive confirmation feedback completes.
         """
         max_wait_seconds = 180
         start_time = time.time()
         last_log_time = start_time
+        modal_dismissed_time: Optional[float] = None
 
-        log.info("Waiting for easyBet post-submission page state change and verification completion...")
+        log.info("Waiting for easyBet post-submission page state change and confirmation feedback...")
 
-        # Initial pause to allow submission request to register on easyBet backend
-        time.sleep(2.0)
+        # Brief initial pause to allow submission network request to dispatch
+        time.sleep(1.5)
 
         while time.time() - start_time < max_wait_seconds:
             elapsed = time.time() - start_time
 
             # Periodic heartbeat log every 5 seconds
             if time.time() - last_log_time >= 5.0:
-                log.info(f"Still waiting for easyBet verification to complete... ({elapsed:.0f}s elapsed)")
+                log.info(f"Still waiting for easyBet confirmation feedback... ({elapsed:.0f}s elapsed)")
                 last_log_time = time.time()
 
             try:
@@ -443,7 +466,6 @@ class EasyBetAdapter(BaseSiteAdapter):
                 return RegistrationStatus.ALREADY_REGISTERED, "Account details already registered", None
 
             # 2. Check for Explicit Validation / Submission Error Banner
-            # Only match actual error spans/divs, strictly excluding field container classes like errorAlign
             error_loc = page.locator(
                 'span.InputField-module__error___-z7h5, div.SignUp-module__error___, .error-message, .general-input__error, [role="alert"]:visible'
             ).first
@@ -471,17 +493,8 @@ class EasyBetAdapter(BaseSiteAdapter):
                 log.info(f"Page state changed: easyBet requested KYC / Identity Verification ({elapsed:.1f}s)")
                 return RegistrationStatus.MANUAL_REVIEW, "KYC / Account verification required", None
 
-            # 4. Check if Registration Modal Closed or Navigated Away
-            if "registration" not in current_url:
-                log.info(f"Page state changed: easyBet navigated to post-registration page '{page.url}' ({elapsed:.1f}s)")
-                return RegistrationStatus.SUCCESS, "Registration completed successfully", None
-
-            reg_modal = page.locator("div[class*='SignUp-module__main'], div.SignUp").first
-            if not reg_modal.is_visible(timeout=150):
-                log.info(f"Page state changed: easyBet registration modal closed successfully ({elapsed:.1f}s)")
-                return RegistrationStatus.SUCCESS, "Registration completed successfully (Modal dismissed)", None
-
-            # 5. Check for Deposit Screen / Success confirmation elements
+            # 4. Check for POSITIVE Confirmation Feedback from Website
+            # Look for Deposit button, Onboarding modal ("Welcome to easyBet"), user profile icon, or balance
             deposit_visible = any(
                 page.locator(sel).first.is_visible(timeout=150)
                 for sel in [
@@ -489,22 +502,175 @@ class EasyBetAdapter(BaseSiteAdapter):
                     '[data-hook*="deposit"]', '[class*="deposit" i]'
                 ]
             )
-            if deposit_visible:
-                log.info(f"Page state changed: easyBet displayed deposit screen ({elapsed:.1f}s)")
-                return RegistrationStatus.SUCCESS, "Registration succeeded (Deposit screen displayed)", None
+            onboarding_visible = page.locator(
+                '.CustomerOnboarding-module__modal, div:has-text("Pick a side. Bet YES or NO"), button.CustomerOnboarding-module__close___1Ijzd'
+            ).first.is_visible(timeout=150)
 
             welcome_visible = any(
                 page.locator(sel).first.is_visible(timeout=150)
                 for sel in [
                     'div:has-text("Welcome to easyBet")', 'div:has-text("Registration Successful")',
-                    'div:has-text("Account Created")'
+                    'div:has-text("Account Created")', 'div:has-text("Deposit now to get started")'
                 ]
             )
-            if welcome_visible:
-                log.info(f"Page state changed: easyBet displayed account creation confirmation ({elapsed:.1f}s)")
-                return RegistrationStatus.SUCCESS, "Registration succeeded (Welcome confirmation)", None
+            user_icon_visible = page.locator(
+                'a[data-hook="header-user-account"], .UserButtons-module__userIcon, [class*="userIcon" i]'
+            ).first.is_visible(timeout=150)
+
+            if deposit_visible or onboarding_visible or welcome_visible or user_icon_visible:
+                feedback_desc = []
+                if deposit_visible:
+                    feedback_desc.append("Deposit screen/button")
+                if onboarding_visible:
+                    feedback_desc.append("Welcome onboarding modal")
+                if welcome_visible:
+                    feedback_desc.append("Welcome/success banner")
+                if user_icon_visible:
+                    feedback_desc.append("Authenticated user profile")
+
+                feedback_str = " + ".join(feedback_desc)
+                log.info(f"✅ Page state changed: Received positive confirmation feedback from easyBet: {feedback_str} ({elapsed:.1f}s)")
+
+                # Natural observation pause so operator in visual non-headless mode can clearly see confirmation
+                human_pause(page, 3.0, 4.5)
+                return RegistrationStatus.SUCCESS, f"Registration succeeded: confirmed by easyBet ({feedback_str})", "EASYBET_AUTH_CONFIRMED"
+
+            # 5. Check if Registration Modal has Closed or Navigated Away
+            reg_modal = page.locator("div[class*='SignUp-module__main'], div.SignUp").first
+            modal_open = reg_modal.is_visible(timeout=150)
+            is_on_reg_url = "registration" in current_url
+
+            if not modal_open and not is_on_reg_url:
+                # Registration modal has closed. DO NOT exit immediately; wait a stabilization window
+                # for easyBet backend responses / deposit / onboarding modals to render.
+                if modal_dismissed_time is None:
+                    modal_dismissed_time = time.time()
+                    log.info(f"easyBet registration modal closed at {elapsed:.1f}s. Observing page for confirmation feedback...")
+
+                # Allow at least 10 seconds of observation post-modal closure
+                if time.time() - modal_dismissed_time >= 10.0:
+                    # Check if login button is still visible or if session has transitioned
+                    login_cta = page.locator('a[data-hook="header-direct-login"], a:has-text("Log In")').first
+                    is_login_still_present = login_cta.is_visible(timeout=300)
+                    if not is_login_still_present:
+                        log.info(f"Page state changed: easyBet login CTA absent, session authenticated ({elapsed:.1f}s)")
+                        return RegistrationStatus.SUCCESS, "Registration succeeded: confirmed by easyBet (Session authenticated)", "EASYBET_AUTH_CONFIRMED"
+                    else:
+                        log.info(f"Page state changed: easyBet navigated to post-registration page '{page.url}' ({elapsed:.1f}s)")
+                        return RegistrationStatus.SUCCESS, "Registration completed successfully", None
 
             time.sleep(1.0)
 
         log.warning(f"Timeout of {max_wait_seconds}s reached waiting for easyBet verification.")
         return RegistrationStatus.MANUAL_REVIEW, "Timeout waiting for post-submission page change", None
+
+    def login(
+        self,
+        page: Page,
+        username_or_email: str,
+        password: str,
+        client_id: Optional[str] = None
+    ) -> tuple[bool, Optional[str], Optional[str]]:
+        """
+        Authenticates into easyBet using header credentials inputs on exchange.easybet.net and captures proof.
+        Returns: (success: bool, screenshot_path: Optional[str], error_message: Optional[str])
+        """
+        cid = client_id or "client"
+        log = logger.bind(client_id=cid, site=self.site_name, step="login")
+        log.info(f"Initiating login verification for {username_or_email} on easyBet")
+
+        target_url = "https://exchange.easybet.net/"
+        try:
+            log.info(f"Navigating to login target URL: {target_url}")
+            page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
+            human_pause(page, 1.5, 2.5)
+
+            # 1. Dismiss cookie consent banner if visible
+            self._dismiss_cookieyes(page, log)
+
+            # 2. Dismiss onboarding modal if visible
+            close_btn = page.locator(
+                ".CustomerOnboarding-module__close___1Ijzd, .ReactModalPortal button:has-text('✕'), .ReactModalPortal button"
+            ).first
+            if close_btn.is_visible(timeout=2500):
+                log.info("Dismissing onboarding modal before login...")
+                human_click(close_btn, page)
+                human_pause(page, 0.5, 1.0)
+
+            # 3. Check if session is already authenticated
+            deposit_cta = page.locator('button:has-text("Deposit"), a:has-text("Deposit"), [data-hook*="deposit"]').first
+            user_icon = page.locator('a[data-hook="header-user-account"], .UserButtons-module__userIcon').first
+            if deposit_cta.is_visible(timeout=1500) or user_icon.is_visible(timeout=1500):
+                log.info(f"Session already authenticated on easyBet for {username_or_email}")
+                proof_path = capture_login_proof_screenshot(page, cid, self.site_id)
+                return True, proof_path, None
+
+            # 4. Locate top header login inputs
+            u_inp = page.locator('input[data-hook="username-top"], input[name="username"]').first
+            p_inp = page.locator('input[data-hook="password-top"], input[name="password"]').first
+            login_btn = page.locator('a[data-hook="header-direct-login"], a:has-text("Log In"), button:has-text("Log In")').first
+
+            if not u_inp.is_visible(timeout=2500):
+                open_modal_btn = page.locator('a[data-hook="header-open-login-modal"], a:has-text("Log In"), button:has-text("Log In")').first
+                if open_modal_btn.is_visible(timeout=2000):
+                    log.info("Opening login modal on easyBet...")
+                    human_click(open_modal_btn, page)
+                    human_pause(page, 1.0, 1.5)
+                    u_inp = page.locator('input[data-hook="username-top"], input[name="username"], input[type="text"]:visible').first
+                    p_inp = page.locator('input[data-hook="password-top"], input[name="password"], input[type="password"]:visible').first
+
+            if not u_inp.is_visible(timeout=3000) or not p_inp.is_visible(timeout=3000):
+                bundle = capture_failure_bundle(page, cid, self.site_id, "login_inputs_missing")
+                return False, bundle.screenshot_path, "Login inputs not visible on easyBet"
+
+            # 5. Fill credentials with human typing
+            log.info(f"Filling easyBet credentials for {username_or_email}")
+            human_type(u_inp, username_or_email, page=page, min_delay_ms=25, max_delay_ms=60)
+            human_pause(page, 0.3, 0.6)
+            human_type(p_inp, password, page=page, min_delay_ms=25, max_delay_ms=60)
+            human_pause(page, 0.4, 0.8)
+
+            # 6. Click Log In button
+            log.info("Submitting easyBet login form...")
+            if login_btn.is_visible(timeout=2000):
+                human_click(login_btn, page)
+            else:
+                p_inp.press("Enter")
+
+            # 7. Wait for response & state transition
+            page.wait_for_timeout(4000)
+
+            # Dismiss onboarding modal if it appears post-login
+            if close_btn.is_visible(timeout=2000):
+                try:
+                    close_btn.click(force=True)
+                    page.wait_for_timeout(1000)
+                except Exception:
+                    pass
+
+            # 8. Check for errors
+            err_el = page.locator('div[class*="error"]:visible, span[class*="error"]:visible, [role="alert"]:visible').first
+            err_msg_found = None
+            if err_el.is_visible(timeout=1000):
+                err_text = err_el.inner_text().strip()
+                if err_text and any(k in err_text.lower() for k in ["incorrect", "invalid", "locked", "disabled", "failed", "unrecognized", "error"]):
+                    err_msg_found = err_text
+
+            # 9. Verify authenticated state
+            deposit_cta = page.locator('button:has-text("Deposit"), a:has-text("Deposit"), [data-hook*="deposit"]').first
+            user_icon = page.locator('a[data-hook="header-user-account"], .UserButtons-module__userIcon').first
+            is_auth = (deposit_cta.is_visible(timeout=2000) or user_icon.is_visible(timeout=2000)) and not err_msg_found
+
+            proof_path = capture_login_proof_screenshot(page, cid, self.site_id)
+            if is_auth:
+                log.info(f"Login verified successfully for {username_or_email} on easyBet! Proof: {proof_path}")
+                return True, proof_path, None
+            else:
+                err_summary = err_msg_found or "Login unconfirmed: account indicators not found"
+                log.warning(f"easyBet login unconfirmed: {err_summary}")
+                return False, proof_path, err_summary
+
+        except Exception as e:
+            log.error(f"Exception during easyBet login verification: {e}")
+            bundle = capture_failure_bundle(page, cid, self.site_id, "login_exception", e)
+            return False, bundle.screenshot_path, str(e)

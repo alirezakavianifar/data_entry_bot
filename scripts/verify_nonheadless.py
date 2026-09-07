@@ -38,7 +38,7 @@ from sites.easybet import EasyBetAdapter
 from sites.twentyfour7bet import TwentyFourSevenBetAdapter
 from sites.paddypower import PaddyPowerAdapter
 from sites.betfair import BetfairAdapter
-from sites.dragonbet import DragonBetAdapter
+from sites.dragonbet import DragonBetAdapter, BettingLounge2Adapter
 from core.logger import get_logger
 
 log = get_logger(step="VisualVerification")
@@ -49,6 +49,7 @@ PLAYBOOK_ADAPTERS = {
     "planetsportbet": PlanetSportBetAdapter,
     "betstgeorge": BetStGeorgeAdapter,
     "dragonbet": DragonBetAdapter,
+    "bettinglounge2": BettingLounge2Adapter,
 }
 
 OTHER_ADAPTERS = {
@@ -65,6 +66,7 @@ PHASE2_ADAPTERS = {
     "paddypower": PaddyPowerAdapter,
     "betfair": BetfairAdapter,
     "dragonbet": DragonBetAdapter,
+    "bettinglounge2": BettingLounge2Adapter,
 }
 
 AVAILABLE_ADAPTERS = {**PLAYBOOK_ADAPTERS, **OTHER_ADAPTERS, **PHASE2_ADAPTERS}

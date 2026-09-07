@@ -1244,10 +1244,14 @@ class BaseSiteAdapter(ABC):
         log = get_logger(site_id=self.site_id, step="navigate")
         log.info(f"Navigating to {url}")
         
-        resp = page.goto(url, wait_until="domcontentloaded", timeout=25000)
+        try:
+            resp = page.goto(url, wait_until="domcontentloaded", timeout=35000)
+            status = resp.status if resp else 200
+        except Exception as e:
+            log.warning(f"Navigation to {url} encountered timeout/error: {e}")
+            status = 200
         page.wait_for_timeout(2000)
         
-        status = resp.status if resp else 200
         if status == 403 or self.check_geoblock(page):
             log.warning(f"Geoblock / 403 detected on {self.site_name}")
             return False
@@ -1358,6 +1362,8 @@ class BaseSiteAdapter(ABC):
             # If site is an FSB technology platform (e.g. planetsportbet, bresbet, starsports)
             if self.site_id in ("planetsportbet", "bresbet", "starsports"):
                 target_url = f"{clean_base_url}?account=login"
+            elif self.site_id == "easybet":
+                target_url = "https://exchange.easybet.net/"
             else:
                 target_url = clean_base_url
 

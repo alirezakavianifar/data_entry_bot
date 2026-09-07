@@ -189,8 +189,91 @@ class GoogleSheetsProvider(BaseDataProvider):
             return False
 
     def record_failure(self, result: RegistrationResult) -> bool:
+        """
+        Logs failure into console/state and updates the client's row in the
+        Google Sheets 'Client Details' tab (Notes column) so operators see the issue.
+        """
         logger.warning(f"Google Sheets failure log: {result.client_name} on {result.site_name}: {result.error_summary}")
-        return True
+        try:
+            ss = self._get_spreadsheet()
+            worksheet = None
+            for ws in ss.worksheets():
+                if ws.title.strip().lower() == self.input_sheet_name.strip().lower():
+                    worksheet = ws
+                    break
+            if not worksheet:
+                worksheet = ss.get_worksheet(0)
+
+            rows = worksheet.get_all_values()
+            if not rows:
+                return True
+
+            header_row_idx = 0
+            col_map = {}
+            for r_idx, row in enumerate(rows[:10]):
+                lower_row = [str(c).strip().lower() for c in row]
+                if "client" in lower_row or "first name" in lower_row or "email" in lower_row:
+                    header_row_idx = r_idx
+                    for col_idx, cell in enumerate(row):
+                        if cell:
+                            col_map[cell.strip().lower()] = col_idx
+                    break
+
+            if not col_map:
+                return True
+
+            note_col_idx = None
+            for k, col in col_map.items():
+                if "note" in k:
+                    note_col_idx = col
+                    break
+
+            if note_col_idx is None:
+                note_col_idx = len(rows[header_row_idx])
+                worksheet.update_cell(header_row_idx + 1, note_col_idx + 1, "Notes")
+
+            c_name_clean = (result.client_name or "").strip().lower()
+            email_clean = (result.email or "").strip().lower()
+            target_row_num = None
+
+            for row_num, row in enumerate(rows[header_row_idx + 1:], start=header_row_idx + 2):
+                def get_row_cell(key_fragment):
+                    for k, col in col_map.items():
+                        if key_fragment in k and col < len(row):
+                            return row[col]
+                    return ""
+
+                client_val = get_row_cell("client").strip().lower()
+                first_name = get_row_cell("first name").strip().lower()
+                last_name = get_row_cell("last name").strip().lower()
+                full_name = client_val or f"{first_name} {last_name}".strip()
+                email_val = get_row_cell("email").strip().lower()
+
+                name_match = c_name_clean and (full_name == c_name_clean or c_name_clean in full_name or full_name in c_name_clean)
+                email_match = email_clean and (email_val == email_clean)
+
+                if name_match or email_match:
+                    target_row_num = row_num
+                    break
+
+            if target_row_num:
+                existing_val = ""
+                if target_row_num - 1 < len(rows) and note_col_idx < len(rows[target_row_num - 1]):
+                    existing_val = rows[target_row_num - 1][note_col_idx].strip()
+
+                issue_desc = result.notes or result.error_summary or "Registration failed"
+                formatted_entry = f"[{result.site_name}] {issue_desc}"
+
+                if formatted_entry not in existing_val:
+                    new_val = f"{existing_val} | {formatted_entry}".strip(" |")
+                    # gspread is 1-indexed for rows and cols
+                    worksheet.update_cell(target_row_num, note_col_idx + 1, new_val)
+                    logger.info(f"Updated Google Sheets Client Details notes for {result.client_name}: {formatted_entry}")
+
+            return True
+        except Exception as e:
+            logger.warning(f"Could not update Client Details notes column in Google Sheets: {e}")
+            return True
 
     def remove_success(self, client_name: str, site_name: str, email: str = "") -> int:
         """

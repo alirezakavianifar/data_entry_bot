@@ -21,10 +21,11 @@ echo   11. 247 Bet
 echo   12. Paddy Power
 echo   13. Betfair
 echo   14. DragonBet
-echo   15. Phase 2 Sites Only (Sequential)
-echo   16. All Sites (Sequential)
+echo   15. DragonBet (Betting Lounge #2)
+echo   16. Phase 2 Sites Only (Sequential)
+echo   17. All Sites (Sequential)
 echo.
-set /p choice="Enter option (1-16, default 1): "
+set /p choice="Enter option (1-17, default 1): "
 
 if "%choice%"=="1" set target=bresbet
 if "%choice%"=="2" set target=starsports
@@ -40,8 +41,9 @@ if "%choice%"=="11" set target=247bet
 if "%choice%"=="12" set target=paddypower
 if "%choice%"=="13" set target=betfair
 if "%choice%"=="14" set target=dragonbet
-if "%choice%"=="15" set target=phase2
-if "%choice%"=="16" set target=all
+if "%choice%"=="15" set target=bettinglounge2
+if "%choice%"=="16" set target=phase2
+if "%choice%"=="17" set target=all
 if "%target%"=="" set target=bresbet
 
 echo.

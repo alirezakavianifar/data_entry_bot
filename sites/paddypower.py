@@ -475,7 +475,55 @@ class PaddyPowerAdapter(BaseSiteAdapter):
                 clean_phone = client.phone.lstrip("0") if client.phone.startswith("0") else client.phone
                 log.info(f"Filling Phone: {clean_phone}")
                 human_type(phone_field, clean_phone, page=page, min_delay_ms=35, max_delay_ms=75)
-                human_pause(page, 0.3, 0.6)
+                # Unfocus phone field to trigger website inline validation
+                try:
+                    phone_field.evaluate("el => { el.dispatchEvent(new Event('blur', { bubbles: true })); el.blur(); }")
+                except Exception:
+                    pass
+                human_pause(page, 0.6, 1.0)
+
+                # Check if website rejected or failed to validate the mobile number
+                phone_err = page.locator(
+                    "span.validation-message.error, "
+                    ".phone-number-items .validation-message, "
+                    ".phone-number-items .error, "
+                    ".phone-number-items .state-read-invalid, "
+                    "span:has-text('could not validate your mobile number'), "
+                    "div:has-text('could not validate your mobile number'), "
+                    ".state-read-invalid input#phoneNumber, "
+                    "[data-qa-selector*='phoneNumber'] ~ .validation-message"
+                ).first
+                if phone_err.is_visible(timeout=1500):
+                    err_txt = ""
+                    try:
+                        err_span = page.locator("span.validation-message.error, .phone-number-items .validation-message, span:has-text('could not validate')").first
+                        if err_span.is_visible(timeout=800):
+                            err_txt = err_span.inner_text().strip()
+                    except Exception:
+                        pass
+                    if not err_txt:
+                        err_txt = "We could not validate your mobile number, please check and try again."
+
+                    log.warning(f"❌ Mobile phone validation failed on Paddy Power for {client.full_name}: '{err_txt}' (Phone entered: {clean_phone})")
+                    screenshot_path = None
+                    try:
+                        bundle = capture_failure_bundle(page, client.client_id, self.site_id, "phone_validation", Exception(err_txt))
+                        screenshot_path = str(bundle.screenshot_path) if bundle else None
+                    except Exception:
+                        pass
+
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.FAILED,
+                        email=client.email,
+                        error_summary=f"Invalid phone number: {err_txt}",
+                        notes=f"Phone number validation failed on Paddy Power: '{err_txt}'. Please check client mobile number ({client.phone}).",
+                        screenshot_path=screenshot_path
+                    )
+
 
             # 6. Email & Password (Right Column)
             email_field = page.locator("#email, input[type='email'], input[name='email']").first
@@ -488,25 +536,55 @@ class PaddyPowerAdapter(BaseSiteAdapter):
             if pw_field.is_visible(timeout=3000):
                 log.info("Filling Password...")
                 human_type(pw_field, password_used, page=page, min_delay_ms=30, max_delay_ms=70)
-                human_pause(page, 0.4, 0.7)
+                human_pause(page, 0.4, 0.6)
 
             # 7. Security Question & Answer (Right Column)
-            sec_q = page.locator("#securityQuestion, select[name='securityQuestion']").first
+            sec_q = page.locator("select#securityQuestion, select[data-qa-selector='securityQuestion'], select[name='securityQuestion']").first
             if sec_q.is_visible(timeout=2500):
                 try:
+                    human_click(sec_q, page)
                     sec_q.select_option(index=1)
                     human_pause(page, 0.3, 0.5)
                 except Exception:
                     pass
-            sec_a = page.locator("#securityAnswer, input[name='securityAnswer']").first
-            if sec_a.is_visible(timeout=2000):
-                log.info("Filling Security Answer...")
+                page.evaluate("""() => {
+                    const sel = document.querySelector("select#securityQuestion, select[data-qa-selector='securityQuestion']");
+                    if (sel) {
+                        if (!sel.value) sel.selectedIndex = 1;
+                        sel.dispatchEvent(new Event('input', { bubbles: true }));
+                        sel.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                }""")
+                human_pause(page, 0.2, 0.4)
+
+            sec_a = page.locator("input#securityAnswer, input[data-qa-selector='securityAnswer'], input[name='securityAnswer']").first
+            if sec_a.is_visible(timeout=2500):
+                log.info(f"Filling Security Answer: {sec_answer}")
+                try:
+                    human_click(sec_a, page)
+                except Exception:
+                    sec_a.click(force=True)
                 human_type(sec_a, sec_answer, page=page, min_delay_ms=30, max_delay_ms=65)
+                page.evaluate("""(val) => {
+                    const inp = document.querySelector("input#securityAnswer, input[data-qa-selector='securityAnswer']");
+                    if (inp) {
+                        inp.focus();
+                        if (!inp.value || inp.value.trim() === '') {
+                            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                            if (nativeSetter) nativeSetter.call(inp, String(val));
+                            else inp.value = String(val);
+                        }
+                        inp.dispatchEvent(new Event('input', { bubbles: true }));
+                        inp.dispatchEvent(new Event('change', { bubbles: true }));
+                        inp.dispatchEvent(new Event('blur', { bubbles: true }));
+                        inp.blur();
+                    }
+                }""", sec_answer)
                 human_pause(page, 0.3, 0.6)
 
             # 8. Deposit Limit (Time period & Limit amount - Lower Right)
             log.info("Configuring Deposit Limit...")
-            limit_freq = page.locator("#depositLimitPeriod, [data-qa-selector='depositLimitPeriod'], #depositLimitFrequency, select[name*='depositLimit']").first
+            limit_freq = page.locator("select#depositLimitPeriod, select[data-qa-selector='depositLimitPeriod'], select[name*='depositLimit'], select#depositLimitFrequency").first
             if limit_freq.is_visible(timeout=2000):
                 try:
                     limit_freq.select_option(value="DAY")
@@ -516,34 +594,35 @@ class PaddyPowerAdapter(BaseSiteAdapter):
                     except Exception:
                         pass
                 page.evaluate("""() => {
-                    const sel = document.querySelector('#depositLimitPeriod, [data-qa-selector="depositLimitPeriod"], select[name*="depositLimit"]');
+                    const sel = document.querySelector("select[data-qa-selector='depositLimitPeriod'], select#depositLimitPeriod, select[name*='depositLimit']");
                     if (sel) {
                         sel.dispatchEvent(new Event('change', { bubbles: true }));
                     }
                 }""")
                 human_pause(page, 0.3, 0.6)
 
-            limit_amt = page.locator("#depositLimitAmount, [data-qa-selector='depositLimitAmount'], input[name*='depositLimitAmount']").first
+            limit_amt = page.locator("input#depositLimitAmount, input[data-qa-selector='depositLimitAmount'], input[name*='depositLimitAmount']").first
             if limit_amt.is_visible(timeout=2000):
                 try:
-                    page.wait_for_selector("#depositLimitAmount:not([disabled]), [data-qa-selector='depositLimitAmount']:not([disabled])", timeout=4000)
+                    page.wait_for_selector("input#depositLimitAmount:not([disabled]), input[data-qa-selector='depositLimitAmount']:not([disabled])", timeout=4000)
                 except Exception:
                     pass
                 deposit_val = getattr(client, "deposit_limit", None) or "250"
                 log.info(f"Filling Deposit Limit amount: £{deposit_val}")
                 human_type(limit_amt, str(deposit_val), page=page, min_delay_ms=30, max_delay_ms=60)
-                page.evaluate("""(val) => {
-                    const inp = document.querySelector('#depositLimitAmount, [data-qa-selector="depositLimitAmount"]');
-                    if (inp && (!inp.value || inp.value.trim() === '')) {
-                        inp.focus();
-                        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-                        if (nativeSetter) nativeSetter.call(inp, String(val));
-                        else inp.value = String(val);
-                        inp.dispatchEvent(new Event('input', { bubbles: true }));
-                        inp.dispatchEvent(new Event('change', { bubbles: true }));
-                        inp.blur();
-                    }
-                }""", deposit_val)
+                try:
+                    page.evaluate("""(val) => {
+                        const inp = document.querySelector('input#depositLimitAmount, input[data-qa-selector="depositLimitAmount"]');
+                        if (inp && (!inp.value || inp.value.trim() === '')) {
+                            inp.focus();
+                            inp.value = String(val);
+                            inp.dispatchEvent(new Event('input', { bubbles: true }));
+                            inp.dispatchEvent(new Event('change', { bubbles: true }));
+                            inp.blur();
+                        }
+                    }""", deposit_val)
+                except Exception:
+                    pass
                 human_pause(page, 0.3, 0.6)
 
             # 9. Funds Protection / Terms Acknowledgement (Bottom Right)
@@ -555,7 +634,7 @@ class PaddyPowerAdapter(BaseSiteAdapter):
                 ".rgx-funds-protection button[role='checkbox'], "
                 "button[role='checkbox'].rgx-checkbox"
             ).first
-            if funds_btn.is_visible(timeout=2000):
+            if funds_btn.is_visible(timeout=1500):
                 is_checked = funds_btn.get_attribute("aria-checked") == "true"
                 if not is_checked:
                     log.info("Toggling Funds Protection checkbox...")
@@ -572,26 +651,40 @@ class PaddyPowerAdapter(BaseSiteAdapter):
                             }
                         }""")
             else:
-                tc_checkbox = page.locator("#termsAndConditions_acknowledgement, input[name='termsAndConditions_acknowledgement']").first
+                tc_checkbox = page.locator(
+                    "#customerFundsProtection, "
+                    "input[data-qa-selector='customerFundsProtection'], "
+                    "input[name='customerFundsProtection'], "
+                    "#termsAndConditions_acknowledgement, "
+                    "input[name='termsAndConditions_acknowledgement']"
+                ).first
                 if tc_checkbox.count() > 0:
                     if not tc_checkbox.is_checked():
                         tc_label = page.locator(
+                            "label[data-qa-selector='label_customerFundsProtection'], "
+                            "label[for='customerFundsProtection'], "
+                            "label:has(#customerFundsProtection), "
                             "label[for='termsAndConditions_acknowledgement'], "
                             ".rgx-checkbox-container:has(#termsAndConditions_acknowledgement), "
                             "label:has-text('I acknowledge that Paddy Power holds my funds'), "
                             "label:has-text('I acknowledge')"
                         ).first
-                        if tc_label.is_visible(timeout=2000):
-                            human_click(tc_label, page)
+                        if tc_label.is_visible(timeout=1500):
+                            log.info("Clicking Funds Protection label...")
+                            try:
+                                human_click(tc_label, page)
+                            except Exception:
+                                tc_label.click(force=True)
                             human_pause(page, 0.4, 0.8)
                         else:
                             tc_checkbox.check(force=True)
 
                     if not tc_checkbox.is_checked():
                         page.evaluate("""() => {
-                            const cb = document.querySelector('#termsAndConditions_acknowledgement, input[name=\"termsAndConditions_acknowledgement\"]');
+                            const cb = document.querySelector('#customerFundsProtection, input[data-qa-selector=\"customerFundsProtection\"], #termsAndConditions_acknowledgement, input[name=\"termsAndConditions_acknowledgement\"]');
                             if (cb) {
                                 cb.checked = true;
+                                cb.dispatchEvent(new Event('input', { bubbles: true }));
                                 cb.dispatchEvent(new Event('change', { bubbles: true }));
                             }
                         }""")
@@ -650,6 +743,26 @@ class PaddyPowerAdapter(BaseSiteAdapter):
             # Final reCAPTCHA resolution check before clicking submit
             self._handle_recaptcha(page, log)
 
+            # Pre-submission form validation check: Scan for visible error messages
+            visible_errs = page.locator("span.validation-message.error, .validation-message.error, .form-error, .error-message").all()
+            err_texts = [e.inner_text().strip() for e in visible_errs if e.is_visible() and e.inner_text().strip()]
+            if err_texts:
+                err_summary = "; ".join(dict.fromkeys(err_texts))
+                log.warning(f"❌ Paddy Power registration form has validation errors before submit: {err_summary}")
+                bundle = capture_failure_bundle(page, client.client_id, self.site_id, "pre_submit_validation", Exception(err_summary))
+                screenshot_path = str(bundle.screenshot_path) if bundle else None
+                return RegistrationResult(
+                    client_id=client.client_id,
+                    client_name=client.full_name,
+                    site_id=self.site_id,
+                    site_name=self.site_name,
+                    status=RegistrationStatus.FAILED,
+                    email=client.email,
+                    error_summary=f"Form validation failed: {err_summary}",
+                    notes=f"Paddy Power form validation error: '{err_summary}'. Please check client details.",
+                    screenshot_path=screenshot_path
+                )
+
             # Submit Registration
             submit_btn = page.locator(
                 "button[data-qa-selector='joinButton'], "
@@ -661,6 +774,73 @@ class PaddyPowerAdapter(BaseSiteAdapter):
                 "button:has-text('Open Account')"
             ).first
             if submit_btn.is_visible(timeout=4000):
+                btn_class = submit_btn.get_attribute("class") or ""
+                if "invalid-form-btn" in btn_class:
+                    # Attempt recovery: ensure securityAnswer and depositLimit are triggered
+                    page.evaluate("""() => {
+                        const sec = document.querySelector("input#securityAnswer, input[data-qa-selector='securityAnswer']");
+                        if (sec && sec.value) {
+                            sec.dispatchEvent(new Event('input', { bubbles: true }));
+                            sec.dispatchEvent(new Event('change', { bubbles: true }));
+                            sec.dispatchEvent(new Event('blur', { bubbles: true }));
+                        }
+                        const dep = document.querySelector("input#depositLimitAmount, input[data-qa-selector='depositLimitAmount']");
+                        if (dep && dep.value) {
+                            dep.dispatchEvent(new Event('input', { bubbles: true }));
+                            dep.dispatchEvent(new Event('change', { bubbles: true }));
+                            dep.dispatchEvent(new Event('blur', { bubbles: true }));
+                        }
+                    }""")
+                    human_pause(page, 0.5, 0.8)
+                    btn_class = submit_btn.get_attribute("class") or ""
+
+                if "invalid-form-btn" in btn_class:
+                    inv_messages = page.evaluate("""() => {
+                        const errors = [];
+                        // 1. True error elements (excluding password strength indicators like 'Strong. Well done!')
+                        document.querySelectorAll('.validation-message.error, .error-message, .form-error, .state-read-invalid .validation-message').forEach(el => {
+                            const txt = el.innerText.trim();
+                            if (txt && !errors.includes(txt)) {
+                                const lower = txt.toLowerCase();
+                                if (!lower.includes('strong') && !lower.includes('well done') && !lower.includes('good') && !lower.includes('cookie')) {
+                                    errors.push(txt);
+                                }
+                            }
+                        });
+                        // 2. Identify any uncompleted or empty required fields
+                        document.querySelectorAll('input:not([type="hidden"]), select').forEach(el => {
+                            const qa = el.getAttribute('data-qa-selector') || el.id || el.name || '';
+                            const state = el.getAttribute('data-qa-state');
+                            const val = (el.value || '').trim();
+                            if (['promotionCode', 'languageSelector', 'country'].includes(qa)) return;
+                            if (state === 'is-invalid') {
+                                errors.push(`${qa || 'Field'} is invalid`);
+                            } else if (!val && el.offsetParent !== null) {
+                                if (el.type === 'checkbox' && !el.checked) {
+                                    errors.push(`${qa || 'Checkbox'} is required`);
+                                } else if (el.type !== 'checkbox' && el.type !== 'radio') {
+                                    errors.push(`${qa || 'Field'} is not filled`);
+                                }
+                            }
+                        });
+                        return errors;
+                    }""")
+                    inv_summary = "; ".join(dict.fromkeys(inv_messages)) if inv_messages else "Join button disabled due to incomplete/invalid field(s)"
+                    log.warning(f"❌ Cannot submit Paddy Power form: {inv_summary}")
+                    bundle = capture_failure_bundle(page, client.client_id, self.site_id, "submit_disabled", Exception(inv_summary))
+                    screenshot_path = str(bundle.screenshot_path) if bundle else None
+                    return RegistrationResult(
+                        client_id=client.client_id,
+                        client_name=client.full_name,
+                        site_id=self.site_id,
+                        site_name=self.site_name,
+                        status=RegistrationStatus.FAILED,
+                        email=client.email,
+                        error_summary=f"Form submission blocked: {inv_summary}",
+                        notes=f"Paddy Power registration blocked: {inv_summary}",
+                        screenshot_path=screenshot_path
+                    )
+
                 log.info("Clicking registration submission on Paddy Power with human click...")
                 human_click(submit_btn, page)
 

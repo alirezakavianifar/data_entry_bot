@@ -183,9 +183,93 @@ class ExcelDataProvider(BaseDataProvider):
             return False
 
     def record_failure(self, result: RegistrationResult) -> bool:
-        """Logs failure into console and state (Excel results sheet focuses on successful accounts)."""
+        """
+        Logs failure into console/state and updates the client's row in the
+        'Client Details' tab (Notes column) so operators immediately see the problem.
+        """
         logger.warning(f"Registration failure recorded for {result.client_name} on {result.site_name}: {result.error_summary}")
-        return True
+        if not self.file_path.exists():
+            return True
+
+        try:
+            wb = self._get_or_create_workbook()
+            sheet = None
+            for name in wb.sheetnames:
+                if name.strip().lower() == self.input_sheet_name.strip().lower():
+                    sheet = wb[name]
+                    break
+            if not sheet:
+                sheet = wb.active
+
+            # Find header row
+            header_row_idx = 1
+            col_map = {}
+            for r in range(1, min(10, sheet.max_row + 1)):
+                row_vals = [sheet.cell(r, c).value for c in range(1, sheet.max_column + 1)]
+                str_vals = [str(v).strip().lower() if v is not None else "" for v in row_vals]
+                if "client" in str_vals or "first name" in str_vals or "email" in str_vals:
+                    header_row_idx = r
+                    for col_idx, raw_val in enumerate(row_vals, start=1):
+                        if raw_val:
+                            norm_key = str(raw_val).strip().lower()
+                            col_map[norm_key] = col_idx
+                    break
+
+            if not col_map:
+                return True
+
+            # Find notes column
+            note_col = None
+            for k, col in col_map.items():
+                if "note" in k:
+                    note_col = col
+                    break
+
+            if not note_col:
+                # If no notes column exists, append one after last column
+                note_col = sheet.max_column + 1
+                sheet.cell(header_row_idx, note_col).value = "Notes"
+
+            # Locate matching client row
+            c_name_clean = (result.client_name or "").strip().lower()
+            email_clean = (result.email or "").strip().lower()
+            target_row = None
+
+            for row_idx in range(header_row_idx + 1, sheet.max_row + 1):
+                def get_row_val(key_fragment):
+                    for k, col in col_map.items():
+                        if key_fragment in k:
+                            return sheet.cell(row_idx, col).value
+                    return None
+
+                row_client = str(get_row_val("client") or "").strip().lower()
+                row_first = str(get_row_val("first name") or "").strip().lower()
+                row_last = str(get_row_val("last name") or "").strip().lower()
+                row_full = row_client or f"{row_first} {row_last}".strip()
+                row_email = str(get_row_val("email") or "").strip().lower()
+
+                name_match = c_name_clean and (row_full == c_name_clean or c_name_clean in row_full or row_full in c_name_clean)
+                email_match = email_clean and (row_email == email_clean)
+
+                if name_match or email_match:
+                    target_row = row_idx
+                    break
+
+            if target_row:
+                cell = sheet.cell(target_row, note_col)
+                existing_note = str(cell.value or "").strip()
+                issue_desc = result.notes or result.error_summary or "Registration failed"
+                formatted_entry = f"[{result.site_name}] {issue_desc}"
+
+                if formatted_entry not in existing_note:
+                    cell.value = f"{existing_note} | {formatted_entry}".strip(" |")
+                    wb.save(str(self.file_path))
+                    logger.info(f"Recorded failure note for {result.client_name} in '{self.file_path.name}': {formatted_entry}")
+
+            return True
+        except Exception as e:
+            logger.warning(f"Could not update Client Details notes column in Excel: {e}")
+            return True
 
     def remove_success(self, client_name: str, site_name: str, email: str = "") -> int:
         """

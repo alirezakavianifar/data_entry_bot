@@ -18,7 +18,7 @@ from sites.easybet import EasyBetAdapter
 from sites.twentyfour7bet import TwentyFourSevenBetAdapter
 from sites.paddypower import PaddyPowerAdapter
 from sites.betfair import BetfairAdapter
-from sites.dragonbet import DragonBetAdapter
+from sites.dragonbet import DragonBetAdapter, BettingLounge2Adapter
 from core.logger import get_logger
 
 logger = get_logger(step="SiteRegistry")
@@ -252,7 +252,7 @@ def get_site_adapters(filter_sites: Optional[List[str]] = None, enabled_only: bo
         "betgoodwin": BetgoodwinAdapter,
         "betstgeorge": BetStGeorgeAdapter,
         "bettinglounge1": BetStGeorgeAdapter,
-        "bettinglounge2": DragonBetAdapter,
+        "bettinglounge2": BettingLounge2Adapter,
         "dragonbet": DragonBetAdapter,
         "bettom": BetTOMAdapter,
         "easybet": EasyBetAdapter,
@@ -278,6 +278,8 @@ def get_site_adapters(filter_sites: Optional[List[str]] = None, enabled_only: bo
             adapter = AffiliateRedirectAdapter(site_id=site_id, site_name=name, promo_url=url)
 
         # Update dynamic attributes
+        adapter.site_id = site_id
+        adapter.site_name = name
         adapter.default_promo_url = url
         adapter.requires_uk_ip = requires_uk_ip
 

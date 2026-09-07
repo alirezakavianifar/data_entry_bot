@@ -242,7 +242,8 @@ class RegistrationResult(BaseModel):
         site_key = self.site_id.strip().lower().replace(" ", "").replace("_", "")
         is_embargo_site = site_key in ("paddypower", "betfair", "betfairpromo", "paddypowerpromo") or self.acceptable_to_bet_date is not None
 
-        if is_embargo_site:
+        # Only apply 25-day betting embargo note to successful accounts
+        if is_embargo_site and self.status == RegistrationStatus.SUCCESS:
             if not self.signup_date or not self.acceptable_to_bet_date:
                 self.calculate_embargo(25)
             s_date_str = self.signup_date.strftime("%d/%m/%Y") if self.signup_date else self.timestamp.strftime("%d/%m/%Y")
@@ -255,5 +256,7 @@ class RegistrationResult(BaseModel):
 
         if self.notes and self.notes.strip():
             return self.notes.strip()
+        if self.error_summary and self.error_summary.strip():
+            return self.error_summary.strip()
         return self.account_reference or ""
 

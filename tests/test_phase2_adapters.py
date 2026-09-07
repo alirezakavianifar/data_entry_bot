@@ -7,7 +7,7 @@ from sites.easybet import EasyBetAdapter
 from sites.twentyfour7bet import TwentyFourSevenBetAdapter
 from sites.paddypower import PaddyPowerAdapter
 from sites.betfair import BetfairAdapter
-from sites.dragonbet import DragonBetAdapter
+from sites.dragonbet import DragonBetAdapter, BettingLounge2Adapter
 
 
 @pytest.fixture
@@ -53,6 +53,11 @@ def test_phase2_site_adapter_factory():
     assert "dragonbet" in adapter_map
     assert isinstance(adapter_map["dragonbet"], DragonBetAdapter)
     assert adapter_map["dragonbet"].site_name == "DragonBet"
+
+    adapters_bl2 = get_site_adapters(filter_sites=["bettinglounge2"])
+    assert len(adapters_bl2) == 1
+    assert isinstance(adapters_bl2[0], BettingLounge2Adapter)
+    assert adapters_bl2[0].site_id == "bettinglounge2"
 
 
 def test_paddypower_dry_run_and_embargo(sample_client):
@@ -106,6 +111,84 @@ def test_easybet_dry_run(sample_client):
     assert "Please do not place any bets" not in result.formatted_notes
 
 
+def test_easybet_verification_confirmation_deposit_screen(sample_client):
+    adapter = EasyBetAdapter()
+    mock_page = MagicMock()
+    mock_page.url = "https://exchange.easybet.net/"
+
+    def locator_side_effect(selector):
+        loc = MagicMock()
+        loc.first = loc
+        if any(s in selector for s in ('button:has-text("Deposit")', 'a:has-text("Deposit")', '[data-hook*="deposit"]')):
+            loc.is_visible.return_value = True
+            loc.inner_text.return_value = "Deposit"
+        elif "body" in selector:
+            loc.inner_text.return_value = "Welcome to easyBet Deposit now to get started"
+        else:
+            loc.is_visible.return_value = False
+        return loc
+
+    mock_page.locator.side_effect = locator_side_effect
+    log = MagicMock()
+
+    status, summary, ref = adapter._wait_for_verification_results(mock_page, sample_client, log)
+    assert status == RegistrationStatus.SUCCESS
+    assert ref == "EASYBET_AUTH_CONFIRMED"
+    assert "confirmed by easyBet" in summary
+    assert "Deposit" in summary
+
+
+def test_easybet_verification_onboarding_modal(sample_client):
+    adapter = EasyBetAdapter()
+    mock_page = MagicMock()
+    mock_page.url = "https://exchange.easybet.net/"
+
+    def locator_side_effect(selector):
+        loc = MagicMock()
+        loc.first = loc
+        if "CustomerOnboarding" in selector or "Pick a side" in selector:
+            loc.is_visible.return_value = True
+        elif "body" in selector:
+            loc.inner_text.return_value = "Pick a side. Bet YES or NO on the biggest questions"
+        else:
+            loc.is_visible.return_value = False
+        return loc
+
+    mock_page.locator.side_effect = locator_side_effect
+    log = MagicMock()
+
+    status, summary, ref = adapter._wait_for_verification_results(mock_page, sample_client, log)
+    assert status == RegistrationStatus.SUCCESS
+    assert ref == "EASYBET_AUTH_CONFIRMED"
+    assert "confirmed by easyBet" in summary
+
+
+def test_easybet_login_success():
+    adapter = EasyBetAdapter()
+    mock_page = MagicMock()
+    mock_page.url = "https://exchange.easybet.net/"
+
+    def locator_side_effect(selector):
+        loc = MagicMock()
+        loc.first = loc
+        if "username" in selector or "password" in selector or "login" in selector.lower():
+            loc.is_visible.return_value = True
+        elif any(s in selector for s in ('button:has-text("Deposit")', 'a:has-text("Deposit")', '[data-hook*="deposit"]')):
+            loc.is_visible.return_value = True
+        else:
+            loc.is_visible.return_value = False
+        return loc
+
+    mock_page.locator.side_effect = locator_side_effect
+    from unittest.mock import patch
+    with patch("sites.easybet.capture_login_proof_screenshot", return_value="artifacts/proof.png"):
+        success, proof, err = adapter.login(mock_page, "courtn0108", "Pass12345!")
+        assert success is True
+        assert proof == "artifacts/proof.png"
+        assert err is None
+        mock_page.goto.assert_called_with("https://exchange.easybet.net/", wait_until="domcontentloaded", timeout=30000)
+
+
 def test_247bet_dry_run(sample_client):
     adapter = TwentyFourSevenBetAdapter()
     mock_page = MagicMock()
@@ -115,3 +198,21 @@ def test_247bet_dry_run(sample_client):
     assert result.status == RegistrationStatus.SUCCESS
     assert result.site_id == "247bet"
     assert "Please do not place any bets" not in result.formatted_notes
+
+
+def test_dragonbet_dry_run(sample_client):
+    adapter = DragonBetAdapter()
+    result = adapter.register_client(sample_client, None, dry_run=True)
+    assert result.status == RegistrationStatus.SUCCESS
+    assert result.site_id == "dragonbet"
+    assert result.username == sample_client.email
+
+
+def test_bettinglounge2_dry_run(sample_client):
+    adapter = BettingLounge2Adapter()
+    result = adapter.register_client(sample_client, None, dry_run=True)
+    assert result.status == RegistrationStatus.SUCCESS
+    assert result.site_id == "bettinglounge2"
+    assert "DragonBet" in result.site_name
+    assert result.username == sample_client.email
+
