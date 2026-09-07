@@ -28,10 +28,20 @@ def test_gui_lifecycle_and_dry_run():
         app._select_stage1_only()
         assert app.site_checkbox_vars["fairplaybet"].get() is True
 
+        # Phase 2 site selection test
+        app._select_phase2_only()
+        phase2_keys = ["bettom", "easybet", "247bet", "paddypower", "betfair", "dragonbet"]
+        for p2 in phase2_keys:
+            assert app.site_checkbox_vars[p2].get() is True
+        assert app.site_checkbox_vars["fairplaybet"].get() is False
+
         # Promo Links tab validation
         assert hasattr(app, "tab_promos")
         assert len(app.promo_field_entries) > 0
         assert "fairplaybet" in app.promo_field_entries
+        for p2 in phase2_keys:
+            assert p2 in app.promo_field_entries
+            assert app.promo_field_entries[p2]["url_var"].get().startswith("http")
         assert app.promo_field_entries["fairplaybet"]["url_var"].get().startswith("http")
 
         # Dry-Run execution from GUI

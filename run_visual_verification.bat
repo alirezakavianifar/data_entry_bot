@@ -15,9 +15,16 @@ echo   5. Fairplay Bet
 echo   6. Betfred
 echo   7. QuinnBet
 echo   8. Betgoodwin
-echo   9. All Sites (Sequential)
+echo   9. BetTOM
+echo   10. easyBet
+echo   11. 247 Bet
+echo   12. Paddy Power
+echo   13. Betfair
+echo   14. DragonBet
+echo   15. Phase 2 Sites Only (Sequential)
+echo   16. All Sites (Sequential)
 echo.
-set /p choice="Enter option (1-9, default 1): "
+set /p choice="Enter option (1-16, default 1): "
 
 if "%choice%"=="1" set target=bresbet
 if "%choice%"=="2" set target=starsports
@@ -27,7 +34,14 @@ if "%choice%"=="5" set target=fairplaybet
 if "%choice%"=="6" set target=betfred
 if "%choice%"=="7" set target=quinnbet
 if "%choice%"=="8" set target=betgoodwin
-if "%choice%"=="9" set target=all
+if "%choice%"=="9" set target=bettom
+if "%choice%"=="10" set target=easybet
+if "%choice%"=="11" set target=247bet
+if "%choice%"=="12" set target=paddypower
+if "%choice%"=="13" set target=betfair
+if "%choice%"=="14" set target=dragonbet
+if "%choice%"=="15" set target=phase2
+if "%choice%"=="16" set target=all
 if "%target%"=="" set target=bresbet
 
 echo.

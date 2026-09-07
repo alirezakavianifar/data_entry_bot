@@ -163,15 +163,25 @@ class GoogleSheetsProvider(BaseDataProvider):
                 worksheet = ss.add_worksheet(title=self.output_sheet_name, rows="1000", cols="10")
                 worksheet.append_row(["Name", "Account", "Email", "Username", "Password", "Timestamp", "Notes"])
 
-            worksheet.append_row([
+            note_val = result.formatted_notes
+            row_data = [
                 result.client_name,
                 result.site_name,
                 result.email,
                 result.username or result.email,
                 result.password or "",
                 result.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-                result.account_reference or ""
-            ])
+                note_val
+            ]
+
+            # Check existing headers for dedicated date columns
+            headers = [str(h).strip().lower() for h in worksheet.row_values(1)]
+            if any("signup date" in h or "acceptable" in h for h in headers):
+                s_str = result.signup_date.strftime("%d/%m/%Y") if result.signup_date else ""
+                a_str = result.acceptable_to_bet_date.strftime("%d/%m/%Y") if result.acceptable_to_bet_date else ""
+                row_data.extend([s_str, a_str])
+
+            worksheet.append_row(row_data)
             logger.info(f"Recorded success for {result.client_name} on {result.site_name} in Google Sheets")
             return True
         except Exception as e:

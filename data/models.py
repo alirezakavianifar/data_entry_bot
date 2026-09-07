@@ -221,4 +221,39 @@ class RegistrationResult(BaseModel):
     login_screenshot_path: Optional[str] = None
     login_error: Optional[str] = None
     timestamp: datetime.datetime = Field(default_factory=datetime.datetime.now)
+    signup_date: Optional[datetime.date] = None
+    acceptable_to_bet_date: Optional[datetime.date] = None
+    notes: Optional[str] = None
+
+    def calculate_embargo(self, embargo_days: int = 25) -> None:
+        """Calculates and sets signup_date and acceptable_to_bet_date based on result timestamp."""
+        if not self.signup_date:
+            self.signup_date = self.timestamp.date()
+        self.acceptable_to_bet_date = self.signup_date + datetime.timedelta(days=embargo_days)
+
+    @property
+    def formatted_notes(self) -> str:
+        """
+        Generates the standard note for the results sheet.
+        If the bookmaker is Paddy Power or Betfair (or embargo dates are set),
+        enforces the 25-day betting embargo statement required by policy:
+        'successful. Please do not place any bets until within 25 days. Signed up: <date>. Acceptable to bet on: <date>.'
+        """
+        site_key = self.site_id.strip().lower().replace(" ", "").replace("_", "")
+        is_embargo_site = site_key in ("paddypower", "betfair", "betfairpromo", "paddypowerpromo") or self.acceptable_to_bet_date is not None
+
+        if is_embargo_site:
+            if not self.signup_date or not self.acceptable_to_bet_date:
+                self.calculate_embargo(25)
+            s_date_str = self.signup_date.strftime("%d/%m/%Y") if self.signup_date else self.timestamp.strftime("%d/%m/%Y")
+            a_date_str = self.acceptable_to_bet_date.strftime("%d/%m/%Y") if self.acceptable_to_bet_date else ""
+
+            embargo_msg = f"successful. Please do not place any bets until within 25 days. Signed up: {s_date_str}. Acceptable to bet on: {a_date_str}."
+            if self.account_reference and self.account_reference.strip():
+                return f"{embargo_msg} (Ref: {self.account_reference.strip()})"
+            return embargo_msg
+
+        if self.notes and self.notes.strip():
+            return self.notes.strip()
+        return self.account_reference or ""
 

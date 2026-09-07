@@ -270,6 +270,11 @@ class DataEntryBotGUI(ctk.CTk):
         )
         self.btn_clear_sites.pack(side="right", padx=(5, 0))
 
+        self.btn_phase2 = ctk.CTkButton(
+            self.sites_header_frame, text="Phase 2 Sites", width=95, height=24, fg_color="#2e7d32", hover_color="#1b5e20", command=self._select_phase2_only
+        )
+        self.btn_phase2.pack(side="right", padx=(5, 0))
+
         self.btn_local_only = ctk.CTkButton(
             self.sites_header_frame, text="Stage 1 (Fairplay)", width=110, height=24, fg_color="#1f538d", command=self._select_stage1_only
         )
@@ -592,8 +597,9 @@ class DataEntryBotGUI(ctk.CTk):
             req_uk = cfg.get("requires_uk_ip", True)
             badge = "(Any IP)" if not req_uk else "(UK IP)"
             
-            # Default to previous selected state if available, else True for fairplaybet
-            init_val = old_vars.get(site_id, True if site_id == "fairplaybet" else False)
+            # Default to previous selected state if available, else True for active Phase 2 and Stage 1 sites
+            active_defaults = {"fairplaybet", "bettom", "easybet", "247bet", "paddypower", "betfair", "dragonbet"}
+            init_val = old_vars.get(site_id, True if site_id in active_defaults else False)
             var = ctk.BooleanVar(value=init_val)
             self.site_checkbox_vars[site_id] = var
 
@@ -640,6 +646,11 @@ class DataEntryBotGUI(ctk.CTk):
     def _select_stage1_only(self):
         for site_id, var in self.site_checkbox_vars.items():
             var.set(True if site_id == "fairplaybet" else False)
+
+    def _select_phase2_only(self):
+        phase2_sites = {"bettom", "easybet", "247bet", "paddypower", "betfair", "dragonbet"}
+        for site_id, var in self.site_checkbox_vars.items():
+            var.set(site_id in phase2_sites)
 
     def _open_artifacts_folder(self):
         if ARTIFACTS_DIR.exists():

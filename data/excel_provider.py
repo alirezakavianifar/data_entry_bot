@@ -155,15 +155,25 @@ class ExcelDataProvider(BaseDataProvider):
             if target_sheet.max_row == 0 or (target_sheet.max_row == 1 and not target_sheet.cell(1, 1).value):
                 target_sheet.append(["Name", "Account", "Email", "Username", "Password", "Timestamp", "Notes"])
 
-            target_sheet.append([
+            note_val = result.formatted_notes
+            row_data = [
                 result.client_name,
                 result.site_name,
                 result.email,
                 result.username or result.email,
                 result.password or "",
                 result.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-                result.account_reference or ""
-            ])
+                note_val
+            ]
+
+            # If headers include dedicated date columns, append them
+            header_vals = [str(target_sheet.cell(1, c).value or "").strip().lower() for c in range(1, target_sheet.max_column + 1)]
+            if any("signup date" in h or "acceptable" in h for h in header_vals):
+                s_str = result.signup_date.strftime("%d/%m/%Y") if result.signup_date else ""
+                a_str = result.acceptable_to_bet_date.strftime("%d/%m/%Y") if result.acceptable_to_bet_date else ""
+                row_data.extend([s_str, a_str])
+
+            target_sheet.append(row_data)
 
             wb.save(str(self.file_path))
             logger.info(f"Recorded success for {result.client_name} on {result.site_name} in {self.file_path.name}")

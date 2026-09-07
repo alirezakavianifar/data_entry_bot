@@ -13,6 +13,12 @@ from sites.starsports import StarSportsAdapter
 from sites.betgoodwin import BetgoodwinAdapter
 from sites.betstgeorge import BetStGeorgeAdapter
 from sites.affiliate_redirects import AffiliateRedirectAdapter
+from sites.bettom import BetTOMAdapter
+from sites.easybet import EasyBetAdapter
+from sites.twentyfour7bet import TwentyFourSevenBetAdapter
+from sites.paddypower import PaddyPowerAdapter
+from sites.betfair import BetfairAdapter
+from sites.dragonbet import DragonBetAdapter
 from core.logger import get_logger
 
 logger = get_logger(step="SiteRegistry")
@@ -75,12 +81,55 @@ DEFAULT_PROMO_LINKS: Dict[str, dict] = {
         "requires_uk_ip": True
     },
     "bettinglounge2": {
-        "name": "Betting Lounge #2",
-        "url": "https://bettinglounge.co.uk/out/ZRKfXhAAACkAStm/?offer=betting",
+        "name": "DragonBet (Betting Lounge #2)",
+        "url": "https://bettinglounge.co.uk/out/ZRKfXhAAACkAStm_/?offer=betting",
         "link_type": "affiliate_redirect",
-        "enabled": False,
+        "enabled": True,
+        "requires_uk_ip": True
+    },
+    "dragonbet": {
+        "name": "DragonBet",
+        "url": "https://bettinglounge.co.uk/out/ZRKfXhAAACkAStm_/?offer=betting",
+        "link_type": "affiliate_redirect",
+        "enabled": True,
+        "requires_uk_ip": True
+    },
+    "bettom": {
+        "name": "BetTOM",
+        "url": "https://www.bettom.com/en/sport/",
+        "link_type": "direct_promo",
+        "enabled": True,
+        "requires_uk_ip": True
+    },
+    "easybet": {
+        "name": "easyBet",
+        "url": "https://welcome.easybet.net/EB20-Football",
+        "link_type": "direct_promo",
+        "enabled": True,
+        "requires_uk_ip": True
+    },
+    "247bet": {
+        "name": "247 Bet",
+        "url": "https://www.247bet.com/en-gb/register",
+        "link_type": "direct_promo",
+        "enabled": True,
+        "requires_uk_ip": True
+    },
+    "paddypower": {
+        "name": "Paddy Power",
+        "url": "https://redirect.rp-offers.com/?id=9708",
+        "link_type": "affiliate_redirect",
+        "enabled": True,
         "requires_uk_ip": True,
-        "notes": "Current link returns 404; update when active link is provided"
+        "notes": "25-day cooling-off betting embargo applies"
+    },
+    "betfair": {
+        "name": "Betfair",
+        "url": "https://redirect.rp-offers.com/?id=8827",
+        "link_type": "affiliate_redirect",
+        "enabled": True,
+        "requires_uk_ip": True,
+        "notes": "25-day cooling-off betting embargo applies"
     }
 }
 
@@ -203,6 +252,13 @@ def get_site_adapters(filter_sites: Optional[List[str]] = None, enabled_only: bo
         "betgoodwin": BetgoodwinAdapter,
         "betstgeorge": BetStGeorgeAdapter,
         "bettinglounge1": BetStGeorgeAdapter,
+        "bettinglounge2": DragonBetAdapter,
+        "dragonbet": DragonBetAdapter,
+        "bettom": BetTOMAdapter,
+        "easybet": EasyBetAdapter,
+        "247bet": TwentyFourSevenBetAdapter,
+        "paddypower": PaddyPowerAdapter,
+        "betfair": BetfairAdapter,
     }
 
     for site_id, site_cfg in config.items():

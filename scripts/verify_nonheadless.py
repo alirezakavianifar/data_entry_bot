@@ -33,6 +33,12 @@ from sites.betfred import BetfredAdapter
 from sites.quinnbet import QuinnbetAdapter
 from sites.betgoodwin import BetgoodwinAdapter
 from sites.fairplaybet import FairplayBetAdapter
+from sites.bettom import BetTOMAdapter
+from sites.easybet import EasyBetAdapter
+from sites.twentyfour7bet import TwentyFourSevenBetAdapter
+from sites.paddypower import PaddyPowerAdapter
+from sites.betfair import BetfairAdapter
+from sites.dragonbet import DragonBetAdapter
 from core.logger import get_logger
 
 log = get_logger(step="VisualVerification")
@@ -42,6 +48,7 @@ PLAYBOOK_ADAPTERS = {
     "starsports": StarSportsAdapter,
     "planetsportbet": PlanetSportBetAdapter,
     "betstgeorge": BetStGeorgeAdapter,
+    "dragonbet": DragonBetAdapter,
 }
 
 OTHER_ADAPTERS = {
@@ -51,13 +58,24 @@ OTHER_ADAPTERS = {
     "fairplaybet": FairplayBetAdapter,
 }
 
-AVAILABLE_ADAPTERS = {**PLAYBOOK_ADAPTERS, **OTHER_ADAPTERS}
+PHASE2_ADAPTERS = {
+    "bettom": BetTOMAdapter,
+    "easybet": EasyBetAdapter,
+    "247bet": TwentyFourSevenBetAdapter,
+    "paddypower": PaddyPowerAdapter,
+    "betfair": BetfairAdapter,
+    "dragonbet": DragonBetAdapter,
+}
+
+AVAILABLE_ADAPTERS = {**PLAYBOOK_ADAPTERS, **OTHER_ADAPTERS, **PHASE2_ADAPTERS}
 
 def run_visual_verification(target: str = "bresbet"):
     target_clean = target.lower().strip()
     
     if target_clean == "all":
         adapters_to_run = [cls() for cls in AVAILABLE_ADAPTERS.values()]
+    elif target_clean in ("phase2", "phase_2"):
+        adapters_to_run = [cls() for cls in PHASE2_ADAPTERS.values()]
     elif target_clean in ("playbook", "playmakers"):
         adapters_to_run = [cls() for cls in PLAYBOOK_ADAPTERS.values()]
     elif target_clean in ("other", "others", "rest", "nonplaybook"):
@@ -65,7 +83,7 @@ def run_visual_verification(target: str = "bresbet"):
     elif target_clean in AVAILABLE_ADAPTERS:
         adapters_to_run = [AVAILABLE_ADAPTERS[target_clean]()]
     else:
-        print(f"Unknown target '{target}'. Available options: {', '.join(AVAILABLE_ADAPTERS.keys())}, 'playbook', 'other', or 'all'")
+        print(f"Unknown target '{target}'. Available options: {', '.join(AVAILABLE_ADAPTERS.keys())}, 'phase2', 'playbook', 'other', or 'all'")
         adapters_to_run = [BresbetAdapter()]
 
     print("\n" + "=" * 65)
@@ -142,8 +160,8 @@ def run_visual_verification(target: str = "bresbet"):
                 print("=" * 45)
 
                 # Keep visible for operator inspection
-                print("\nPausing 8 seconds for visual verification before proceeding...")
-                page.wait_for_timeout(8000)
+                print("\nPausing 15 seconds for visual verification before proceeding...")
+                page.wait_for_timeout(15000)
 
             finally:
                 ctx.close()

@@ -56,11 +56,54 @@
     "requires_uk_ip": true
   },
   "bettinglounge2": {
-    "name": "Betting Lounge #2",
-    "url": "https://bettinglounge.co.uk/out/ZRKfXhAAACkAStm/?offer=betting",
+    "name": "DragonBet (Betting Lounge #2)",
+    "url": "https://bettinglounge.co.uk/out/ZRKfXhAAACkAStm_/?offer=betting",
     "link_type": "affiliate_redirect",
-    "enabled": false,
+    "enabled": true,
+    "requires_uk_ip": true
+  },
+  "dragonbet": {
+    "name": "DragonBet",
+    "url": "https://bettinglounge.co.uk/out/ZRKfXhAAACkAStm_/?offer=betting",
+    "link_type": "affiliate_redirect",
+    "enabled": true,
+    "requires_uk_ip": true
+  },
+  "bettom": {
+    "name": "BetTOM",
+    "url": "https://www.bettom.com/en/sport/",
+    "link_type": "direct_promo",
+    "enabled": true,
+    "requires_uk_ip": true
+  },
+  "easybet": {
+    "name": "easyBet",
+    "url": "https://welcome.easybet.net/EB20-Football",
+    "link_type": "direct_promo",
+    "enabled": true,
+    "requires_uk_ip": true
+  },
+  "247bet": {
+    "name": "247 Bet",
+    "url": "https://www.247bet.com/en-gb/register",
+    "link_type": "direct_promo",
+    "enabled": true,
+    "requires_uk_ip": true
+  },
+  "paddypower": {
+    "name": "Paddy Power",
+    "url": "https://redirect.rp-offers.com/?id=9708",
+    "link_type": "affiliate_redirect",
+    "enabled": true,
     "requires_uk_ip": true,
-    "notes": "Current link returns 404; update when active link is provided"
+    "notes": "25-day cooling-off betting embargo applies"
+  },
+  "betfair": {
+    "name": "Betfair",
+    "url": "https://redirect.rp-offers.com/?id=8827",
+    "link_type": "affiliate_redirect",
+    "enabled": true,
+    "requires_uk_ip": true,
+    "notes": "25-day cooling-off betting embargo applies"
   }
 }

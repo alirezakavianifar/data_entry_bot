@@ -49,10 +49,28 @@ Includes both a **Modern Desktop GUI Application** and a **Command-Line Interfac
   - Robust 3-step registration drawer handling email credentials, password generation, and personal details.
   - Active verification polling (up to 3 minutes / 180s) specifically monitoring the `"Verifying..."` electronic identity check state, guaranteeing the bot waits for the verification process to finish rather than exiting prematurely.
   - Accurately classifies final outcomes: session authentication (`SUCCESS`), explicit email activation requests (`SUCCESS` with email reminder), manual KYC document verification (`MANUAL_REVIEW`), or electronic verification rejection (`FAILED`).
+- **🚀 Phase 2 Bookmakers & Human-Like Behavioral Automation:**
+  - **Identical Human-Like Behavior Across All Adapters:**
+    - **Natural Typing Rhythms (`human_type`):** Character-by-character typing cadence with randomized inter-key delay (25ms–75ms), special pause buffers for punctuation (`@`, `.`, ` `, `-`, `_`), and initial mouse movement via Bézier physics before focusing inputs.
+    - **Cognitive Reading & Digging Pauses (`human_pause`):** Realistic human pauses (0.3s–0.6s between field transitions, 1.5s–3.5s after clicking buttons, and 1.5s–2.5s review pauses before final submissions).
+    - **Smooth Bézier Mouse Trajectories & Clicks (`human_click` / `human_mouse_move`):** Cubic Bézier curves with natural jitter and randomized target coordinates within element bounding boxes, simulating authentic mouse physics.
+    - **Momentum Wheel Scrolling (`human_scroll`):** Multi-step mouse-wheel scrolling with momentum easing and jitter down the page.
+    - **Safe Checkbox Targeting:** Specifically targets the box square (`[part="checkbox"]` or coordinate offset `x+10, y+10`) rather than the text label to eliminate accidental clicks on "Terms" or "Privacy Policy" external links, and automatically closes any unwanted popup tabs.
+  - **BetTOM (`https://www.bettom.com/en/sport/`):** Full EveryMatrix Polymer shadow DOM integration with Cybot Cookiebot bypass, dynamic UK personal title selection (`Mr.`, `Mrs.`, `Miss`, `Ms.`), ISO DOB handling, address matching, and safe 18+ declaration.
+  - **easyBet (`https://welcome.easybet.net/EB20-Football`):** Automated sports exchange onboarding preserving the welcome bonus code `EB20`, CookieYes consent dismissal, and human-cadence multi-step form entry.
+  - **247 Bet (`https://www.247bet.com/en-gb/register`):** Multi-step White Hat Gaming UK account creation covering credentials, personal details, address lookup, safe checkbox ticking, and marketing preferences.
+  - **Paddy Power (`https://redirect.rp-offers.com/?id=9708`):** Flutter Entertainment registration with OneTrust banner handling, address lookup, security question assignment, and deposit limit flow.
+  - **Betfair (`https://redirect.rp-offers.com/?id=8827`):** Flutter Entertainment registration with welcome promo code `ZSKAOL` retention, security question configuration, and human-like form review.
+  - **DragonBet (`https://bettinglounge.co.uk/out/ZRKfXhAAACkAStm_/?offer=betting`):** Playbook Engineering platform adapter featuring full human-paced interaction, responsible gambling deposit limit bypass, and deposit skip handling.
+  - **Mandatory 25-Day Betting Embargo Rule:**
+    - Automatically enforces the cooling-off policy on **Paddy Power** and **Betfair**.
+    - Calculates the registration date (`signup_date = DD/MM/YYYY`) and the acceptable betting date (`acceptable_to_bet_date = signup_date + 25 days`).
+    - Explicitly records the required instruction into the spreadsheet (`Succesful Signuos`):
+      `"successful. Please do not place any bets until within 25 days. Signed up: <DD/MM/YYYY>. Acceptable to bet on: <DD/MM/YYYY>."`
 - **🌐 Residential & Mobile Proxy Integration:**
   - Built-in support for UK Residential and 4G/5G Mobile Proxies (`PROXY_SERVER`, `PROXY_USERNAME`, `PROXY_PASSWORD`) ensuring requests originate from residential UK ASNs.
-- **Human Pacing & Randomized Delay Engine (15–20s):**
-  - Character-by-character human-like typing simulation, realistic pauses during field input and terms review, and a randomized 15–20 second cooldown between account creation steps to prevent anti-bot fingerprinting.
+- **Human Pacing & Anti-Bot Fingerprint Cooldown (15–20s):**
+  - Character-by-character typing simulation, randomized pauses during form input, and cooldowns between account creation steps.
 
 
   - **🌐 Test URL in Browser:** Click "Test" to instantly open any promo/landing page in your default browser to verify it is active and not returning 404 or expired.
@@ -128,6 +146,12 @@ data_entry_bot/
 │   ├── starsports.py            # Star Sports registration & login adapter
 │   ├── betgoodwin.py            # Betgoodwin registration & login adapter
 │   ├── betstgeorge.py           # Bet St George registration & login adapter
+│   ├── bettom.py                # BetTOM EveryMatrix platform adapter (Phase 2)
+│   ├── easybet.py               # easyBet exchange registration adapter (Phase 2)
+│   ├── twentyfour7bet.py        # 247 Bet White Hat Gaming adapter (Phase 2)
+│   ├── paddypower.py            # Paddy Power Flutter adapter with 25-day embargo (Phase 2)
+│   ├── betfair.py               # Betfair Flutter adapter with 25-day embargo (Phase 2)
+│   ├── dragonbet.py             # DragonBet Playbook Engineering adapter (Phase 2)
 │   └── affiliate_redirects.py   # Betting Lounge affiliate redirect handler
 │
 ├── logs/
@@ -141,6 +165,8 @@ data_entry_bot/
 │   ├── test_password_gen.py
 │   ├── test_state.py
 │   ├── test_promo_links_config.py
+│   ├── test_phase2_cooling_off.py
+│   ├── test_phase2_adapters.py
 │   ├── test_batch_advancement.py
 │   ├── test_single_instance.py
 │   └── test_gui.py
