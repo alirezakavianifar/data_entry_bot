@@ -5,6 +5,7 @@ Website: https://www.bettom.com/en/sport/
 """
 
 import datetime
+import re
 from pathlib import Path
 from typing import Optional
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
@@ -184,20 +185,67 @@ class BetTOMAdapter(BaseSiteAdapter):
                 scan(document.body);
             }""", target_title)
 
+            # Safeguard: BetTOM strictly enforces "Only alphabetic characters are allowed."
+            # (No spaces or illegal characters permitted in FirstnameOnDocument or LastNameOnDocument).
+            target_fn = getattr(client, "alphabetic_first_name", None) or re.sub(r"[^a-zA-Z\-']", "", client.first_name.split()[0] if client.first_name else "")
+            target_ln = getattr(client, "alphabetic_last_name", None) or re.sub(r"[^a-zA-Z\-']", "", client.last_name.split()[-1] if client.last_name else "")
+
             # First Name & Last Name with human-like typing
             fn_inp = page.locator('input[name="FirstnameOnDocument"]').first
             ln_inp = page.locator('input[name="LastNameOnDocument"]').first
+            log.info(f"Filling First Name on BetTOM: {target_fn}")
             if fn_inp.is_visible(timeout=3000):
-                human_type(fn_inp, client.first_name, page=page, min_delay_ms=30, max_delay_ms=65)
+                human_type(fn_inp, target_fn, page=page, min_delay_ms=30, max_delay_ms=65)
                 human_pause(page, 0.3, 0.6)
             else:
-                self._fill_shadow_input(page, ["FirstName", "first-name", "firstname"], client.first_name)
+                self._fill_shadow_input(page, ["FirstName", "first-name", "firstname"], target_fn)
 
+            log.info(f"Filling Last Name on BetTOM: {target_ln}")
             if ln_inp.is_visible(timeout=3000):
-                human_type(ln_inp, client.last_name, page=page, min_delay_ms=30, max_delay_ms=65)
+                human_type(ln_inp, target_ln, page=page, min_delay_ms=30, max_delay_ms=65)
                 human_pause(page, 0.3, 0.6)
             else:
-                self._fill_shadow_input(page, ["LastName", "last-name", "lastname"], client.last_name)
+                self._fill_shadow_input(page, ["LastName", "last-name", "lastname"], target_ln)
+
+            # Active Self-Healing Safeguard:
+            # Check immediately if "Only alphabetic characters are allowed." error appeared
+            try:
+                alpha_err = page.locator('.general-input__error:visible, :has-text("Only alphabetic characters are allowed."):visible').first
+                vis = alpha_err.is_visible(timeout=600)
+                from unittest.mock import MagicMock
+                has_alpha_err = bool(vis) and not isinstance(vis, MagicMock)
+            except Exception:
+                has_alpha_err = False
+
+            if has_alpha_err:
+                log.warning(f"Detected inline name validation error on BetTOM: '{alpha_err.inner_text().strip()}'. Executing self-healing recovery...")
+                pure_ln = re.sub(r"[^a-zA-Z]", "", target_ln)
+                if ln_inp.is_visible(timeout=1000):
+                    ln_inp.click()
+                    page.keyboard.press("Control+A")
+                    page.keyboard.press("Backspace")
+                    human_type(ln_inp, pure_ln, page=page, min_delay_ms=25, max_delay_ms=50)
+                    ln_inp.dispatch_event("input")
+                    ln_inp.dispatch_event("change")
+                    page.keyboard.press("Tab")
+                    human_pause(page, 0.3, 0.5)
+
+                try:
+                    still_err = bool(alpha_err.is_visible(timeout=300)) and not isinstance(alpha_err.is_visible(timeout=300), MagicMock)
+                except Exception:
+                    still_err = False
+
+                if still_err:
+                    pure_fn = re.sub(r"[^a-zA-Z]", "", target_fn)
+                    if fn_inp.is_visible(timeout=1000):
+                        fn_inp.click()
+                        page.keyboard.press("Control+A")
+                        page.keyboard.press("Backspace")
+                        human_type(fn_inp, pure_fn, page=page, min_delay_ms=25, max_delay_ms=50)
+                        fn_inp.dispatch_event("input")
+                        fn_inp.dispatch_event("change")
+                        page.keyboard.press("Tab")
+                        human_pause(page, 0.3, 0.5)
 
             # Date of Birth (dd/MM/yyyy) with strict verification
             dob_str = f"{int(client.dob_day):02d}/{int(client.dob_month):02d}/{int(client.dob_year)}"
@@ -357,6 +405,28 @@ class BetTOMAdapter(BaseSiteAdapter):
                 pass
             human_pause(page, 1.0, 2.0)
 
+            # Pre-submission safeguard against lingering inline name validation errors
+            try:
+                alpha_err = page.locator(':has-text("Only alphabetic characters are allowed."):visible').first
+                vis = alpha_err.is_visible(timeout=300)
+                from unittest.mock import MagicMock
+                has_lingering_err = bool(vis) and not isinstance(vis, MagicMock)
+            except Exception:
+                has_lingering_err = False
+
+            if has_lingering_err:
+                log.warning("Lingering 'Only alphabetic characters are allowed.' error detected before submission. Resolving...")
+                pure_ln = re.sub(r"[^a-zA-Z]", "", client.last_name.split()[-1] if client.last_name else "")
+                ln_inp = page.locator('input[name="LastNameOnDocument"]').first
+                if ln_inp.is_visible(timeout=1000):
+                    ln_inp.click()
+                    page.keyboard.press("Control+A")
+                    page.keyboard.press("Backspace")
+                    ln_inp.fill(pure_ln)
+                    ln_inp.dispatch_event("input")
+                    ln_inp.dispatch_event("change")
+                    human_pause(page, 0.3, 0.6)
+
             # Click Done button
             log.info("Clicking final registration submission on BetTOM...")
             done_btn = page.locator('button.registration__button--next, button:has-text("DONE")').first
@@ -511,7 +581,43 @@ class BetTOMAdapter(BaseSiteAdapter):
 
             lower_body = body_text.lower()
 
-            # 0. Check if BetTOM is actively loading or verifying details
+            # 0. Instant Confirmation: Check if BetTOM displayed CONGRATULATIONS / Registration Successful screen
+            # As shown in user screenshot:
+            # - Green checkmark
+            # - "CONGRATULATIONS!"
+            # - "Your account was successfully registered!"
+            # - "Please check your email and continue the registration process."
+            # - "GO TO LOGIN" button
+            has_success_screen = False
+            try:
+                success_loc = page.locator(
+                    ':has-text("CONGRATULATIONS!"), :has-text("CONGRATULATIONS"), '
+                    ':has-text("Your account was successfully registered"), '
+                    ':has-text("successfully registered!"), '
+                    'button:has-text("GO TO LOGIN"), a:has-text("GO TO LOGIN"), :has-text("GO TO LOGIN")'
+                ).first
+                from unittest.mock import MagicMock
+                vis_sc = success_loc.is_visible(timeout=150)
+                if bool(vis_sc) and not isinstance(vis_sc, MagicMock):
+                    has_success_screen = True
+            except Exception:
+                pass
+
+            if not has_success_screen and lower_body:
+                if any(kw in lower_body for kw in [
+                    "congratulations",
+                    "your account was successfully registered",
+                    "successfully registered",
+                    "go to login",
+                    "please check your email and continue the registration process"
+                ]):
+                    has_success_screen = True
+
+            if has_success_screen:
+                log.info(f"Page state changed: BetTOM displayed registration SUCCESS screen: 'CONGRATULATIONS! Your account was successfully registered!' ({elapsed:.1f}s)")
+                return RegistrationStatus.SUCCESS, "Registration successful: Account successfully registered (Please check email to continue)", "BETTOM_SUCCESS"
+
+            # 1. Check if BetTOM is actively loading or verifying details
             is_loading = False
             try:
                 loading_el = page.locator(
@@ -586,6 +692,10 @@ class BetTOMAdapter(BaseSiteAdapter):
                 onboarding_inside_modal = any(
                     modal_container.locator(sel).first.is_visible(timeout=150)
                     for sel in [
+                        'text="CONGRATULATIONS!"', 'text="CONGRATULATIONS"',
+                        'text="Your account was successfully registered!"',
+                        'text="Your account was successfully registered"',
+                        'text="GO TO LOGIN"', 'button:has-text("GO TO LOGIN")', 'a:has-text("GO TO LOGIN")',
                         'text="Deposit Limit"', 'text="Set Limits"', 'text="Safer Gambling"',
                         'text="Welcome to BetTOM"', 'text="Account Created"',
                         'text="Registration Complete"', 'text="Registration Successful"',

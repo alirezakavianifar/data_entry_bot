@@ -101,3 +101,80 @@ def test_client_town_city_and_address_sanitization():
     )
     assert c.town_city == "Nottingham"
     assert c.address_line1 == "45 Victoria Road"
+
+
+def test_client_first_and_last_name_sanitization():
+    # Test middle name entered into last name (Leoni kay Samuda)
+    c1 = Client(
+        client_id="CLI_007",
+        full_name="Leoni kay Samuda",
+        first_name="Leoni",
+        last_name="kay Samuda",
+        email="leoni@example.com",
+        phone="07123456789",
+        address_line1="10 High St",
+        town_city="Romford",
+        postcode="RM3 7AX"
+    )
+    assert c1.first_name == "Leoni"
+    assert c1.last_name == "Samuda"
+    assert c1.alphabetic_first_name == "Leoni"
+    assert c1.alphabetic_last_name == "Samuda"
+
+    # Test title prefix in first name
+    c2 = Client(
+        client_id="CLI_008",
+        full_name="Mr. Thomas Delaney",
+        first_name="Mr. Thomas",
+        last_name="Delaney",
+        email="thomas@example.com",
+        phone="07123456789",
+        address_line1="10 High St",
+        town_city="London",
+        postcode="SW1A 1AA"
+    )
+    assert c2.first_name == "Thomas"
+    assert c2.last_name == "Delaney"
+
+    # Test compound surnames with particles and hyphens
+    c3 = Client(
+        client_id="CLI_009",
+        full_name="Patrick O'Connor",
+        first_name="Patrick",
+        last_name="O'Connor",
+        email="patrick@example.com",
+        phone="07123456789",
+        address_line1="10 High St",
+        town_city="Belfast",
+        postcode="BT1 1AA"
+    )
+    assert c3.last_name == "O'Connor"
+
+    c4 = Client(
+        client_id="CLI_010",
+        full_name="John St John",
+        first_name="John",
+        last_name="St John",
+        email="john@example.com",
+        phone="07123456789",
+        address_line1="10 High St",
+        town_city="Oxford",
+        postcode="OX1 1AA"
+    )
+    assert c4.last_name == "St-John"
+
+    # Test multi-word first name
+    c5 = Client(
+        client_id="CLI_011",
+        full_name="Mary Jane Watson",
+        first_name="Mary Jane",
+        last_name="Watson",
+        email="mary@example.com",
+        phone="07123456789",
+        address_line1="10 High St",
+        town_city="London",
+        postcode="NW1 1AA"
+    )
+    assert c5.first_name == "Mary"
+    assert c5.last_name == "Watson"
+

@@ -1391,7 +1391,27 @@ class BaseSiteAdapter(ABC):
                 login_btn = page.locator('a[data-test*="login"], button[data-test*="login"], a:has-text("Login"), button:has-text("Login"), button:has-text("Log In"), a:has-text("Log In"), button:has-text("Sign In"), a:has-text("Sign In")').first
                 if login_btn.is_visible(timeout=4000):
                     log.info(f"Clicking Login CTA on {self.site_name}")
-                    login_btn.click(force=True)
+                    try:
+                        box = login_btn.bounding_box()
+                        if box and box.get("x", 0) < 0:
+                            # Off-screen element (e.g. mobile drawer), click via JS
+                            page.evaluate("""() => {
+                                const els = Array.from(document.querySelectorAll('a, button'));
+                                const onScreen = els.find(e => {
+                                    const r = e.getBoundingClientRect();
+                                    const txt = (e.textContent || '').trim().toLowerCase();
+                                    return r.width > 0 && r.height > 0 && r.left >= 0 && (txt === 'login' || txt === 'log in' || txt === 'sign in');
+                                });
+                                if (onScreen) onScreen.click();
+                            }""")
+                        else:
+                            login_btn.click(force=True)
+                    except Exception as click_err:
+                        log.debug(f"Direct click on login CTA failed ({click_err}), using JS click fallback...")
+                        try:
+                            page.evaluate("(el) => el.click()", login_btn.element_handle())
+                        except Exception:
+                            pass
                     page.wait_for_timeout(2000)
 
             # 3. Locate credentials fields

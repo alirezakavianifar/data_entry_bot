@@ -100,6 +100,74 @@ class Client(BaseModel):
         """Returns the resolved title without trailing dot, e.g. 'Mr', 'Mrs', 'Miss', 'Ms'."""
         return self.resolved_title.rstrip(".")
 
+    @field_validator("first_name", mode="before")
+    @classmethod
+    def clean_first_name(cls, v) -> str:
+        """
+        Cleans client first name.
+        - Strips titles like 'Mr.', 'Mrs.', 'Miss', 'Ms.', 'Dr.'.
+        - Strips non-alphabetic characters (preserving hyphens and apostrophes).
+        - Extracts the primary first name if multiple words are provided (e.g. 'Mary Jane' -> 'Mary').
+        """
+        if not v:
+            return ""
+        val = str(v).strip()
+        val = re.sub(r"^(Mr|Mrs|Ms|Miss|Dr|Master)\b\.?\s*", "", val, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r"[^a-zA-Z\s\-']", "", val).strip()
+        if not cleaned:
+            cleaned = val
+        parts = cleaned.split()
+        if len(parts) > 1:
+            return parts[0]
+        return cleaned
+
+    @field_validator("last_name", mode="before")
+    @classmethod
+    def clean_last_name(cls, v) -> str:
+        """
+        Cleans client last name / surname to prevent bookmaker validation failures.
+        - Strips punctuation, digits, and disallowed symbols.
+        - Preserves hyphens (e.g. 'Smith-Jones') and apostrophes (e.g. "O'Connor").
+        - If multiple words exist with spaces (e.g. 'kay Samuda', 'Mary Smith'):
+          In UK client data where middle names are entered into the surname column,
+          extracts the true legal surname (e.g. 'Samuda').
+        - Normalizes recognized compound surname particles (e.g. 'St John' -> 'St-John', 'Van Der Bilt' -> 'Van-Der-Bilt')
+          to ensure valid submission on platforms rejecting spaces.
+        """
+        if not v:
+            return ""
+        val = str(v).strip()
+        cleaned = re.sub(r"[^a-zA-Z\s\-']", "", val).strip()
+        if not cleaned:
+            cleaned = val
+        parts = cleaned.split()
+        if not parts:
+            return cleaned
+        if len(parts) == 1:
+            return parts[0]
+
+        # Check for recognized surname particles (e.g. 'St John', 'Van Der Bilt', 'De Silva')
+        surname_particles = {"van", "von", "de", "del", "della", "di", "da", "du", "la", "le", "st", "san", "al", "bin", "ibn"}
+        if parts[0].lower() in surname_particles:
+            return "-".join(parts)
+
+        # For multi-word last names where the earlier token is a middle name (e.g. 'kay Samuda'):
+        # Return the actual legal surname
+        return parts[-1]
+
+    @property
+    def alphabetic_first_name(self) -> str:
+        """Returns first name with strictly alphabetic characters (no spaces)."""
+        return re.sub(r"[^a-zA-Z\-']", "", self.first_name.split()[0] if self.first_name else "")
+
+    @property
+    def alphabetic_last_name(self) -> str:
+        """Returns last name with strictly alphabetic characters and hyphens/apostrophes (no spaces)."""
+        ln = self.last_name.strip()
+        if " " in ln:
+            ln = ln.split()[-1]
+        return re.sub(r"[^a-zA-Z\-']", "", ln)
+
     @field_validator("phone", mode="before")
     @classmethod
     def normalize_uk_phone(cls, v) -> str:

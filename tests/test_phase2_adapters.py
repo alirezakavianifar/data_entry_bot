@@ -100,6 +100,54 @@ def test_bettom_dry_run(sample_client):
     assert "Please do not place any bets" not in result.formatted_notes
 
 
+def test_bettom_name_sanitization_and_safeguards():
+    """Verifies that BetTOM sanitizes multi-word names like 'Leoni kay Samuda' to avoid 'Only alphabetic characters are allowed' errors."""
+    client = Client(
+        client_id="CLI_007",
+        full_name="Leoni kay Samuda",
+        first_name="Leoni",
+        last_name="kay Samuda",
+        email="leoni@example.com",
+        phone="07123456789",
+        address_line1="10 High St",
+        town_city="Romford",
+        postcode="RM3 7AX"
+    )
+    assert client.first_name == "Leoni"
+    assert client.last_name == "Samuda"
+    assert client.alphabetic_last_name == "Samuda"
+    assert " " not in client.alphabetic_last_name
+
+
+def test_bettom_verification_congratulations_screen(sample_client):
+    """Verifies that BetTOM immediately finishes waiting and marks registration as SUCCESS when CONGRATULATIONS modal appears."""
+    adapter = BetTOMAdapter()
+    mock_page = MagicMock()
+    mock_page.url = "https://www.bettom.com/en/sport/"
+
+    def locator_side_effect(selector):
+        loc = MagicMock()
+        loc.first = loc
+        if any(s in selector for s in ("CONGRATULATIONS", "Your account was successfully registered", "GO TO LOGIN")):
+            loc.is_visible.return_value = True
+            loc.inner_text.return_value = "CONGRATULATIONS!\nYour account was successfully registered!\nPlease check your email and continue the registration process.\nGO TO LOGIN"
+        elif "body" in selector:
+            loc.inner_text.return_value = "CONGRATULATIONS! Your account was successfully registered! Please check your email and continue the registration process. GO TO LOGIN"
+        else:
+            loc.is_visible.return_value = False
+        return loc
+
+    mock_page.locator.side_effect = locator_side_effect
+    log = MagicMock()
+
+    status, summary, ref = adapter._wait_for_verification_results(mock_page, sample_client, log)
+    assert status == RegistrationStatus.SUCCESS
+    assert ref == "BETTOM_SUCCESS"
+    assert "Registration successful" in summary
+    assert "CONGRATULATIONS" in log.info.call_args_list[-1][0][0]
+
+
+
 def test_easybet_dry_run(sample_client):
     adapter = EasyBetAdapter()
     mock_page = MagicMock()
@@ -198,6 +246,52 @@ def test_247bet_dry_run(sample_client):
     assert result.status == RegistrationStatus.SUCCESS
     assert result.site_id == "247bet"
     assert "Please do not place any bets" not in result.formatted_notes
+
+
+def test_247bet_login_verification():
+    adapter = TwentyFourSevenBetAdapter()
+    mock_page = MagicMock()
+    mock_page.url = "https://www.247bet.com/en-gb/"
+
+    login_btn_mock = MagicMock()
+    login_btn_mock.bounding_box.return_value = {"x": 1400, "y": 10, "width": 60, "height": 40}
+    login_btn_mock.is_visible.return_value = True
+
+    candidates_mock = MagicMock()
+    candidates_mock.count.return_value = 1
+    candidates_mock.nth.return_value = login_btn_mock
+
+    def locator_side_effect(selector):
+        if "btn--login" in selector:
+            return candidates_mock
+        loc = MagicMock()
+        loc.first = loc
+        loc.is_visible.return_value = True
+        return loc
+
+    mock_page.locator.side_effect = locator_side_effect
+    from unittest.mock import patch
+    with patch("sites.twentyfour7bet.capture_login_proof_screenshot", return_value="artifacts/247bet_proof.png"):
+        success, proof, err = adapter.perform_login_verification(mock_page, "jadelongden95", "Pass12345!")
+        assert success is True
+        assert proof == "artifacts/247bet_proof.png"
+        assert err is None
+
+
+def test_247bet_financial_limits_and_confirmation(sample_client):
+    adapter = TwentyFourSevenBetAdapter()
+    mock_page = MagicMock()
+    mock_page.url = "https://www.247bet.com/en-gb/?cashier=1"
+
+    loc = MagicMock()
+    loc.first = loc
+    loc.is_visible.return_value = True
+    mock_page.locator.return_value = loc
+
+    result = adapter.register_client(sample_client, mock_page, dry_run=False, password="Pass12345!Test")
+    assert result.status == RegistrationStatus.SUCCESS
+    assert result.site_id == "247bet"
+    assert "Registration confirmed by website" in (result.notes or "")
 
 
 def test_dragonbet_dry_run(sample_client):
